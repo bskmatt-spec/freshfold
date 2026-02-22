@@ -24,7 +24,7 @@ import { Badge } from '@/components/ui/badge';
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from '@/components/ui/dialog';
 import {
   MapPin, Shirt, Clock, CreditCard, Package, CheckCircle, Truck,
-  Bell, Tag, Calendar, X, ChevronRight, Home, History, LogOut
+  Bell, Tag, Calendar, X, ChevronRight, Home, History, LogOut, Eye, EyeOff,
 } from 'lucide-react';
 
 type Step = 'address' | 'schedule' | 'payment' | 'tracking';
@@ -37,6 +37,7 @@ export default function CustomerApp() {
   const [authForm, setAuthForm] = useState({ name: '', email: '', phone: '', password: '' });
   const [authError, setAuthError] = useState('');
   const [authLoading, setAuthLoading] = useState(false);
+  const [showPassword, setShowPassword] = useState(false);
 
   // App state
   const [step, setStep] = useState<Step>('address');
@@ -367,7 +368,12 @@ export default function CustomerApp() {
                   </div>
                   <div>
                     <Label htmlFor="password">Password</Label>
-                    <Input id="password" type="password" value={authForm.password} onChange={(e) => setAuthForm({ ...authForm, password: e.target.value })} placeholder="••••••••" required />
+                    <div className="relative">
+                      <Input id="password" type={showPassword ? 'text' : 'password'} value={authForm.password} onChange={(e) => setAuthForm({ ...authForm, password: e.target.value })} placeholder="••••••••" required className="pr-10" />
+                      <button type="button" onClick={() => setShowPassword(v => !v)} className="absolute right-3 top-1/2 -translate-y-1/2 text-gray-400 hover:text-gray-600">
+                        {showPassword ? <EyeOff className="h-4 w-4" /> : <Eye className="h-4 w-4" />}
+                      </button>
+                    </div>
                   </div>
                   {authError && <p className="text-sm text-red-500">{authError}</p>}
                   <Button type="submit" className="w-full" disabled={authLoading}>
@@ -390,7 +396,12 @@ export default function CustomerApp() {
                   </div>
                   <div>
                     <Label htmlFor="su-password">Password</Label>
-                    <Input id="su-password" type="password" value={authForm.password} onChange={(e) => setAuthForm({ ...authForm, password: e.target.value })} placeholder="••••••••" required minLength={8} />
+                    <div className="relative">
+                      <Input id="su-password" type={showPassword ? 'text' : 'password'} value={authForm.password} onChange={(e) => setAuthForm({ ...authForm, password: e.target.value })} placeholder="••••••••" required minLength={8} className="pr-10" />
+                      <button type="button" onClick={() => setShowPassword(v => !v)} className="absolute right-3 top-1/2 -translate-y-1/2 text-gray-400 hover:text-gray-600">
+                        {showPassword ? <EyeOff className="h-4 w-4" /> : <Eye className="h-4 w-4" />}
+                      </button>
+                    </div>
                   </div>
                   {authError && <p className="text-sm text-red-500">{authError}</p>}
                   <Button type="submit" className="w-full" disabled={authLoading}>
