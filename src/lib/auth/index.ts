@@ -7,6 +7,7 @@ import * as schema from "@/db/schema"
 
 export const auth = betterAuth({
   appName: "FreshFold",
+  baseURL: process.env.NEXT_PUBLIC_SITE_URL,
   database: drizzleAdapter(db, { provider: "pg", schema }),
   emailAndPassword: { enabled: true },
   plugins: [bearer()],
