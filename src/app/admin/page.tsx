@@ -83,11 +83,11 @@ export default function AdminDashboard() {
     await createLaundromat({
       name: newLaundromat.name,
       address: newLaundromat.address,
-      latitude: parseFloat(newLaundromat.latitude),
-      longitude: parseFloat(newLaundromat.longitude),
+      latitude: newLaundromat.latitude ? parseFloat(newLaundromat.latitude) : undefined,
+      longitude: newLaundromat.longitude ? parseFloat(newLaundromat.longitude) : undefined,
       deliveryRadius: parseFloat(newLaundromat.deliveryRadius),
-      phone: newLaundromat.phone,
-      email: newLaundromat.email,
+      phone: newLaundromat.phone || undefined,
+      email: newLaundromat.email || undefined,
     });
     setNewLaundromat({ name: '', address: '', latitude: '', longitude: '', deliveryRadius: '5', phone: '', email: '' });
     setIsSubmitting(false);
@@ -174,13 +174,13 @@ export default function AdminDashboard() {
 
       <main className="mx-auto max-w-6xl p-4">
         <Tabs value={activeTab} onValueChange={setActiveTab}>
-          <TabsList className="grid w-full grid-cols-6">
-            <TabsTrigger value="overview">Overview</TabsTrigger>
-            <TabsTrigger value="laundromats">Laundromats</TabsTrigger>
-            <TabsTrigger value="orders">Orders</TabsTrigger>
-            <TabsTrigger value="services">Services</TabsTrigger>
-            <TabsTrigger value="promos">Promos</TabsTrigger>
-            <TabsTrigger value="revenue">Revenue</TabsTrigger>
+          <TabsList className="flex w-full overflow-x-auto gap-1 h-auto p-1 mb-2">
+            <TabsTrigger value="overview" className="flex-shrink-0">Overview</TabsTrigger>
+            <TabsTrigger value="laundromats" className="flex-shrink-0">Laundromats</TabsTrigger>
+            <TabsTrigger value="orders" className="flex-shrink-0">Orders</TabsTrigger>
+            <TabsTrigger value="services" className="flex-shrink-0">Services</TabsTrigger>
+            <TabsTrigger value="promos" className="flex-shrink-0">Promos</TabsTrigger>
+            <TabsTrigger value="revenue" className="flex-shrink-0">Revenue</TabsTrigger>
           </TabsList>
 
           {/* OVERVIEW */}
@@ -276,31 +276,31 @@ export default function AdminDashboard() {
                 <form onSubmit={handleAddLaundromat} className="grid grid-cols-1 md:grid-cols-2 gap-4">
                   <div>
                     <Label>Name</Label>
-                    <Input value={newLaundromat.name} onChange={(e) => setNewLaundromat({ ...newLaundromat, name: e.target.value })} required />
+                    <Input value={newLaundromat.name} onChange={(e) => setNewLaundromat({ ...newLaundromat, name: e.target.value })} placeholder="e.g., Downtown Laundry" required />
                   </div>
                   <div>
                     <Label>Address</Label>
-                    <Input value={newLaundromat.address} onChange={(e) => setNewLaundromat({ ...newLaundromat, address: e.target.value })} required />
-                  </div>
-                  <div>
-                    <Label>Latitude</Label>
-                    <Input type="number" step="any" value={newLaundromat.latitude} onChange={(e) => setNewLaundromat({ ...newLaundromat, latitude: e.target.value })} required />
-                  </div>
-                  <div>
-                    <Label>Longitude</Label>
-                    <Input type="number" step="any" value={newLaundromat.longitude} onChange={(e) => setNewLaundromat({ ...newLaundromat, longitude: e.target.value })} required />
+                    <Input value={newLaundromat.address} onChange={(e) => setNewLaundromat({ ...newLaundromat, address: e.target.value })} placeholder="123 Main St, City, State" required />
                   </div>
                   <div>
                     <Label>Delivery Radius (miles)</Label>
                     <Input type="number" value={newLaundromat.deliveryRadius} onChange={(e) => setNewLaundromat({ ...newLaundromat, deliveryRadius: e.target.value })} required />
                   </div>
                   <div>
-                    <Label>Phone</Label>
-                    <Input value={newLaundromat.phone} onChange={(e) => setNewLaundromat({ ...newLaundromat, phone: e.target.value })} required />
+                    <Label>Latitude <span className="text-gray-400 font-normal text-xs">(optional)</span></Label>
+                    <Input type="number" step="any" value={newLaundromat.latitude} onChange={(e) => setNewLaundromat({ ...newLaundromat, latitude: e.target.value })} placeholder="e.g., 40.7128" />
+                  </div>
+                  <div>
+                    <Label>Longitude <span className="text-gray-400 font-normal text-xs">(optional)</span></Label>
+                    <Input type="number" step="any" value={newLaundromat.longitude} onChange={(e) => setNewLaundromat({ ...newLaundromat, longitude: e.target.value })} placeholder="e.g., -74.0060" />
+                  </div>
+                  <div>
+                    <Label>Phone <span className="text-gray-400 font-normal text-xs">(optional)</span></Label>
+                    <Input type="tel" value={newLaundromat.phone} onChange={(e) => setNewLaundromat({ ...newLaundromat, phone: e.target.value })} placeholder="(555) 123-4567" />
                   </div>
                   <div className="md:col-span-2">
-                    <Label>Email</Label>
-                    <Input type="email" value={newLaundromat.email} onChange={(e) => setNewLaundromat({ ...newLaundromat, email: e.target.value })} required />
+                    <Label>Email <span className="text-gray-400 font-normal text-xs">(optional)</span></Label>
+                    <Input type="email" value={newLaundromat.email} onChange={(e) => setNewLaundromat({ ...newLaundromat, email: e.target.value })} placeholder="contact@laundromat.com" />
                   </div>
                   <div className="md:col-span-2">
                     <Button type="submit" className="w-full" disabled={isSubmitting}>

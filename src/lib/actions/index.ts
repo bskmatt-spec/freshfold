@@ -74,15 +74,21 @@ export async function getLaundromatById(id: string): Promise<Laundromat | null> 
 export async function createLaundromat(data: {
   name: string
   address: string
-  latitude: number
-  longitude: number
+  latitude?: number
+  longitude?: number
   deliveryRadius: number
-  phone: string
-  email: string
+  phone?: string
+  email?: string
 }): Promise<Laundromat> {
   const [l] = await db.insert(laundromats).values({
     id: nanoid(),
-    ...data,
+    name: data.name,
+    address: data.address,
+    latitude: data.latitude ?? 0,
+    longitude: data.longitude ?? 0,
+    deliveryRadius: data.deliveryRadius,
+    phone: data.phone ?? "",
+    email: data.email ?? "",
     qrCode: generateQRCode(),
     isActive: true,
   }).returning()
