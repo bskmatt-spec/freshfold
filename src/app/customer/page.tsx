@@ -1,8 +1,20 @@
 'use client';
 
-import { useEffect, useState } from 'react';
-import { db } from '@/lib/db';
-import { User, Laundromat, Order, Service, Subscription, Notification, calculatePlatformFee } from '@/lib/types';
+import { useEffect, useState, useCallback } from 'react';
+import { useRouter } from 'next/navigation';
+import { authClient, useSession, getAuthHeaders } from '@/lib/auth/client';
+import {
+  findNearestLaundromat, getActiveServicesByLaundromat, createDefaultServices,
+  getOrdersByCustomer, getNotificationsByUser, getUnreadNotificationsByUser,
+  getSubscriptionsByCustomer, getServiceById,
+  validatePromoCode, applyPromoCode as applyPromoAction,
+  createOrder, createPayment, createSubscription as createSubAction,
+  cancelSubscription as cancelSubAction,
+  updateOrder, createOrderStatusNotification,
+  markNotificationRead as markNotifRead, markAllNotificationsRead
+} from '@/lib/actions';
+import { calculatePlatformFee } from '@/lib/types';
+import type { Laundromat, Service, Order, Subscription, Notification } from '@/db/schema';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
@@ -11,13 +23,25 @@ import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
 import { Badge } from '@/components/ui/badge';
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from '@/components/ui/dialog';
-import { MapPin, Shirt, Clock, CreditCard, Package, CheckCircle, Truck, WashingMachine, Bell, Tag, Calendar, X, ChevronRight, Home, History, LogOut } from 'lucide-react';
+import {
+  MapPin, Shirt, Clock, CreditCard, Package, CheckCircle, Truck,
+  Bell, Tag, Calendar, X, ChevronRight, Home, History, LogOut
+} from 'lucide-react';
 
-type Step = 'auth' | 'address' | 'schedule' | 'payment' | 'tracking';
+type Step = 'address' | 'schedule' | 'payment' | 'tracking';
 
 export default function CustomerApp() {
-  const [user, setUser] = useState<User | null>(null);
-  const [step, setStep] = useState<Step>('auth');
+  const { data: session, isPending } = useSession();
+  const router = useRouter();
+
+  // Auth form (sign-up / sign-in)
+  const [authTab, setAuthTab] = useState<'signin' | 'signup'>('signin');
+  const [authForm, setAuthForm] = useState({ name: '', email: '', phone: '', password: '' });
+  const [authError, setAuthError] = useState('');
+  const [authLoading, setAuthLoading] = useState(false);
+
+  // App state
+  const [step, setStep] = useState<Step>('address');
   const [address, setAddress] = useState('');
   const [lat, setLat] = useState(0);
   const [lon, setLon] = useState(0);
@@ -28,83 +52,102 @@ export default function CustomerApp() {
   const [orderNotes, setOrderNotes] = useState('');
   const [orders, setOrders] = useState<Order[]>([]);
   const [currentOrder, setCurrentOrder] = useState<Order | null>(null);
-  const [authForm, setAuthForm] = useState({ name: '', email: '', phone: '' });
   const [activeTab, setActiveTab] = useState('home');
   const [notifications, setNotifications] = useState<Notification[]>([]);
   const [unreadCount, setUnreadCount] = useState(0);
   const [showNotifications, setShowNotifications] = useState(false);
-  // Promo state is on the payment screen only — not consumed until order is created
   const [promoCode, setPromoCode] = useState('');
   const [promoDiscount, setPromoDiscount] = useState(0);
   const [promoApplied, setPromoApplied] = useState(false);
   const [promoError, setPromoError] = useState('');
   const [subscriptions, setSubscriptions] = useState<Subscription[]>([]);
+  const [serviceNames, setServiceNames] = useState<Record<string, string>>({});
   const [showSubscriptionModal, setShowSubscriptionModal] = useState(false);
   const [selectedFrequency, setSelectedFrequency] = useState<'weekly' | 'biweekly' | 'monthly'>('weekly');
   const [selectedPickupDay, setSelectedPickupDay] = useState('Monday');
+  const [isProcessing, setIsProcessing] = useState(false);
 
-  useEffect(() => {
-    db.init();
-    const savedUser = localStorage.getItem('customer_user');
-    if (savedUser) {
-      const parsed = JSON.parse(savedUser);
-      setUser(parsed);
-      loadData(parsed.id);
-      setStep('address');
-    }
+  const loadData = useCallback(async (userId: string) => {
+    const [userOrders, notifs, unread, subs] = await Promise.all([
+      getOrdersByCustomer(userId),
+      getNotificationsByUser(userId),
+      getUnreadNotificationsByUser(userId),
+      getSubscriptionsByCustomer(userId),
+    ]);
+    setOrders(userOrders);
+    setNotifications(notifs);
+    setUnreadCount(unread.length);
+    setSubscriptions(subs);
+
+    // Resolve service names for subscriptions
+    const ids = [...new Set(subs.map(s => s.serviceId))];
+    const names: Record<string, string> = {};
+    await Promise.all(ids.map(async id => {
+      const svc = await getServiceById(id);
+      if (svc) names[id] = svc.name;
+    }));
+    setServiceNames(names);
   }, []);
 
-  const loadData = (userId: string) => {
-    setOrders(db.orders.getByCustomer(userId));
-    setNotifications(db.notifications.getByUser(userId));
-    setUnreadCount(db.notifications.getUnreadByUser(userId).length);
-    setSubscriptions(db.subscriptions.getByCustomer(userId));
-  };
-
-  const handleAuth = (e: React.FormEvent) => {
-    e.preventDefault();
-    let existingUser = db.users.getByEmail(authForm.email);
-    if (!existingUser) {
-      existingUser = db.users.create({
-        email: authForm.email,
-        name: authForm.name,
-        phone: authForm.phone,
-        role: 'customer'
-      });
+  useEffect(() => {
+    if (!isPending && session?.user) {
+      loadData(session.user.id);
     }
-    setUser(existingUser);
-    localStorage.setItem('customer_user', JSON.stringify(existingUser));
-    loadData(existingUser.id);
-    setStep('address');
+  }, [session, isPending, loadData]);
+
+  // ── AUTH ──────────────────────────────────────────────────────────────────
+
+  const handleSignIn = async (e: React.FormEvent) => {
+    e.preventDefault();
+    setAuthLoading(true);
+    setAuthError('');
+    const { error } = await authClient.signIn.email({
+      email: authForm.email,
+      password: authForm.password,
+    });
+    setAuthLoading(false);
+    if (error) {
+      setAuthError(error.message ?? 'Invalid email or password');
+    }
   };
 
-  const handleSignOut = () => {
-    localStorage.removeItem('customer_user');
-    setUser(null);
-    setStep('auth');
-    setOrders([]);
-    setNotifications([]);
-    setUnreadCount(0);
+  const handleSignUp = async (e: React.FormEvent) => {
+    e.preventDefault();
+    setAuthLoading(true);
+    setAuthError('');
+    const { error } = await authClient.signUp.email({
+      name: authForm.name,
+      email: authForm.email,
+      password: authForm.password,
+    });
+    setAuthLoading(false);
+    if (error) {
+      setAuthError(error.message ?? 'Sign up failed');
+    }
   };
 
-  const findLaundromat = () => {
-    // Reset state before new search
+  const handleSignOut = async () => {
+    await authClient.signOut();
+    localStorage.removeItem('bearer_token');
+    router.refresh();
+  };
+
+  // ── LAUNDROMAT SEARCH ─────────────────────────────────────────────────────
+
+  const findLaundromat = async () => {
     setNearestLaundromat(undefined);
     const mockLat = 40.7128 + (Math.random() - 0.5) * 0.1;
-    const mockLon = -74.0060 + (Math.random() - 0.5) * 0.1;
+    const mockLon = -74.006 + (Math.random() - 0.5) * 0.1;
     setLat(mockLat);
     setLon(mockLon);
 
-    const nearest = db.laundromats.findNearest(mockLat, mockLon);
+    const nearest = await findNearestLaundromat(mockLat, mockLon);
     if (nearest) {
       setNearestLaundromat(nearest);
-      const laundromatServices = db.services.getActiveByLaundromat(nearest.id);
-      const svcList = laundromatServices.length === 0
-        ? db.services.createDefaultsForLaundromat(nearest.id)
-        : laundromatServices;
+      let svcList = await getActiveServicesByLaundromat(nearest.id);
+      if (svcList.length === 0) svcList = await createDefaultServices(nearest.id);
       setServices(svcList);
       setSelectedService(svcList[0]);
-      // Reset order form state for fresh booking
       setScheduledPickup('');
       setOrderNotes('');
       setPromoCode('');
@@ -117,13 +160,14 @@ export default function CustomerApp() {
     }
   };
 
-  const applyPromoCode = () => {
+  // ── PROMO ─────────────────────────────────────────────────────────────────
+
+  const handleApplyPromo = async () => {
     if (!promoCode.trim() || promoApplied) return;
-    const price = selectedService?.price || 0;
-    // Validate only — don't increment usage yet
-    const validation = db.promoCodes.validate(promoCode);
+    const price = selectedService?.price ?? 0;
+    const validation = await validatePromoCode(promoCode);
     if (validation.valid && validation.promoCode) {
-      const { promoCode: pc } = validation;
+      const pc = validation.promoCode;
       const discount = Math.min(
         Math.round(price * (pc.discountPercent / 100) * 100) / 100,
         pc.maxDiscount
@@ -132,110 +176,124 @@ export default function CustomerApp() {
       setPromoApplied(true);
       setPromoError('');
     } else {
-      setPromoError(validation.message || 'Invalid promo code');
+      setPromoError(validation.message ?? 'Invalid promo code');
       setPromoDiscount(0);
     }
   };
 
-  const handlePayment = () => {
-    if (!user || !nearestLaundromat || !selectedService) return;
+  // ── PAYMENT ───────────────────────────────────────────────────────────────
 
-    const basePrice = selectedService.price;
-    let discount = 0;
-
-    // Consume promo now, at actual payment
-    if (promoApplied && promoCode) {
-      const result = db.promoCodes.apply(promoCode, basePrice);
-      if (result.success) discount = result.discount;
-    }
-
-    const finalPrice = basePrice - discount;
-    const platformFee = calculatePlatformFee(finalPrice);
-
-    const order = db.orders.create({
-      customerId: user.id,
-      laundromatId: nearestLaundromat.id,
-      status: 'pending',
-      pickupAddress: address,
-      pickupLatitude: lat,
-      pickupLongitude: lon,
-      deliveryAddress: address,
-      deliveryLatitude: lat,
-      deliveryLongitude: lon,
-      scheduledPickup,
-      serviceId: selectedService.id,
-      serviceName: selectedService.name,
-      notes: orderNotes,
-      price: finalPrice,
-      platformFee
-    });
-
-    db.payments.create({
-      orderId: order.id,
-      amount: finalPrice,
-      platformFee,
-      laundromatPayout: finalPrice - platformFee,
-      discountAmount: discount,
-      promoCode: discount > 0 ? promoCode : undefined,
-      status: 'completed'
-    });
-
-    db.notifications.createOrderStatusNotification(user.id, order.id, 'pending');
-
-    setCurrentOrder(order);
-    setStep('tracking');
-    loadData(user.id);
-  };
-
-  const cancelOrder = (orderId: string) => {
-    if (!user) return;
-    if (confirm('Are you sure you want to cancel this order?')) {
-      db.orders.update(orderId, { status: 'cancelled' });
-      db.notifications.createOrderStatusNotification(user.id, orderId, 'cancelled');
-      loadData(user.id);
-      if (currentOrder?.id === orderId) {
-        setCurrentOrder(db.orders.getById(orderId) || null);
+  const handlePayment = async () => {
+    if (!session?.user || !nearestLaundromat || !selectedService) return;
+    setIsProcessing(true);
+    try {
+      const basePrice = selectedService.price;
+      let discount = 0;
+      if (promoApplied && promoCode) {
+        const result = await applyPromoAction(promoCode, basePrice);
+        if (result.success) discount = result.discount;
       }
+      const finalPrice = basePrice - discount;
+      const platformFee = calculatePlatformFee(finalPrice);
+
+      const order = await createOrder({
+        customerId: session.user.id,
+        laundromatId: nearestLaundromat.id,
+        driverId: null,
+        status: 'pending',
+        pickupAddress: address,
+        pickupLatitude: lat,
+        pickupLongitude: lon,
+        deliveryAddress: address,
+        deliveryLatitude: lat,
+        deliveryLongitude: lon,
+        scheduledPickup: new Date(scheduledPickup),
+        serviceId: selectedService.id,
+        serviceName: selectedService.name,
+        notes: orderNotes || null,
+        price: finalPrice,
+        platformFee,
+      });
+
+      await createPayment({
+        orderId: order.id,
+        amount: finalPrice,
+        platformFee,
+        laundromatPayout: finalPrice - platformFee,
+        discountAmount: discount,
+        promoCode: discount > 0 ? promoCode : null,
+        status: 'completed',
+      });
+
+      await createOrderStatusNotification(session.user.id, order.id, 'pending');
+      setCurrentOrder(order);
+      setStep('tracking');
+      await loadData(session.user.id);
+    } finally {
+      setIsProcessing(false);
     }
   };
 
-  const createSubscription = () => {
-    if (!user || !nearestLaundromat || !selectedService) return;
+  // ── CANCEL ORDER ──────────────────────────────────────────────────────────
+
+  const cancelOrder = async (orderId: string) => {
+    if (!session?.user) return;
+    if (!confirm('Are you sure you want to cancel this order?')) return;
+    await updateOrder(orderId, { status: 'cancelled' });
+    await createOrderStatusNotification(session.user.id, orderId, 'cancelled');
+    await loadData(session.user.id);
+    if (currentOrder?.id === orderId) {
+      const updated = orders.find(o => o.id === orderId);
+      if (updated) setCurrentOrder({ ...updated, status: 'cancelled' });
+    }
+  };
+
+  // ── SUBSCRIPTION ──────────────────────────────────────────────────────────
+
+  const handleCreateSubscription = async () => {
+    if (!session?.user || !nearestLaundromat || !selectedService) return;
     const nextPickup = new Date();
     nextPickup.setDate(nextPickup.getDate() + 7);
-    db.subscriptions.create({
-      customerId: user.id,
+    await createSubAction({
+      customerId: session.user.id,
       laundromatId: nearestLaundromat.id,
       serviceId: selectedService.id,
       frequency: selectedFrequency,
       pickupDay: selectedPickupDay,
       price: selectedService.price,
       isActive: true,
-      nextPickup: nextPickup.toISOString()
+      nextPickup,
     });
     setShowSubscriptionModal(false);
-    loadData(user.id);
+    await loadData(session.user.id);
   };
 
-  const cancelSubscription = (subId: string) => {
-    if (confirm('Cancel this subscription?')) {
-      db.subscriptions.cancel(subId);
-      if (user) loadData(user.id);
-    }
+  const handleCancelSubscription = async (subId: string) => {
+    if (!confirm('Cancel this subscription?')) return;
+    await cancelSubAction(subId);
+    if (session?.user) await loadData(session.user.id);
   };
 
-  const markAllRead = () => {
-    if (user) {
-      db.notifications.markAllAsRead(user.id);
-      loadData(user.id);
-    }
+  // ── NOTIFICATIONS ─────────────────────────────────────────────────────────
+
+  const handleMarkAllRead = async () => {
+    if (!session?.user) return;
+    await markAllNotificationsRead(session.user.id);
+    await loadData(session.user.id);
   };
+
+  const handleMarkNotifRead = async (id: string) => {
+    await markNotifRead(id);
+    if (session?.user) await loadData(session.user.id);
+  };
+
+  // ── HELPERS ───────────────────────────────────────────────────────────────
 
   const getStatusIcon = (status: string) => {
     switch (status) {
       case 'pending': return <Clock className="h-5 w-5 text-yellow-500" />;
       case 'picked_up': return <Truck className="h-5 w-5 text-blue-500" />;
-      case 'in_progress': return <WashingMachine className="h-5 w-5 text-purple-500" />;
+      case 'in_progress': return <Package className="h-5 w-5 text-purple-500" />;
       case 'delivered': return <CheckCircle className="h-5 w-5 text-green-500" />;
       case 'cancelled': return <X className="h-5 w-5 text-red-500" />;
       default: return <Package className="h-5 w-5" />;
@@ -244,11 +302,27 @@ export default function CustomerApp() {
 
   const statusLabel: Record<string, string> = {
     pending: 'Pending Pickup', picked_up: 'Picked Up',
-    in_progress: 'In Progress', delivered: 'Delivered', cancelled: 'Cancelled'
+    in_progress: 'In Progress', delivered: 'Delivered', cancelled: 'Cancelled',
   };
 
-  // ── AUTH ──────────────────────────────────────────────────────────────────
-  if (step === 'auth') {
+  // ── LOADING ───────────────────────────────────────────────────────────────
+
+  if (isPending) {
+    return (
+      <div className="min-h-screen bg-gradient-to-br from-blue-50 to-indigo-100 flex items-center justify-center">
+        <div className="text-center">
+          <div className="h-10 w-10 rounded-full bg-blue-500 flex items-center justify-center mx-auto mb-3 animate-pulse">
+            <Shirt className="h-5 w-5 text-white" />
+          </div>
+          <p className="text-gray-600">Loading…</p>
+        </div>
+      </div>
+    );
+  }
+
+  // ── AUTH SCREEN ───────────────────────────────────────────────────────────
+
+  if (!session?.user) {
     return (
       <div className="min-h-screen bg-gradient-to-br from-blue-50 to-indigo-100 flex items-center justify-center p-4">
         <div className="w-full max-w-md">
@@ -257,26 +331,61 @@ export default function CustomerApp() {
               <Shirt className="h-8 w-8 text-white" />
             </div>
             <h1 className="text-3xl font-bold">FreshFold</h1>
-            <p className="text-gray-600 mt-1">Laundry pickup & delivery</p>
+            <p className="text-gray-600 mt-1">Laundry pickup &amp; delivery</p>
           </div>
           <Card>
-            <CardHeader><CardTitle>Create your account</CardTitle></CardHeader>
+            <CardHeader>
+              <div className="flex gap-2">
+                <button
+                  onClick={() => setAuthTab('signin')}
+                  className={`flex-1 py-2 text-sm font-medium rounded-lg transition-colors ${authTab === 'signin' ? 'bg-blue-100 text-blue-700' : 'text-gray-500 hover:bg-gray-50'}`}
+                >
+                  Sign In
+                </button>
+                <button
+                  onClick={() => setAuthTab('signup')}
+                  className={`flex-1 py-2 text-sm font-medium rounded-lg transition-colors ${authTab === 'signup' ? 'bg-blue-100 text-blue-700' : 'text-gray-500 hover:bg-gray-50'}`}
+                >
+                  Create Account
+                </button>
+              </div>
+            </CardHeader>
             <CardContent>
-              <form onSubmit={handleAuth} className="space-y-4">
-                <div>
-                  <Label htmlFor="name">Full Name</Label>
-                  <Input id="name" value={authForm.name} onChange={(e) => setAuthForm({ ...authForm, name: e.target.value })} placeholder="Jane Smith" required />
-                </div>
-                <div>
-                  <Label htmlFor="email">Email</Label>
-                  <Input id="email" type="email" value={authForm.email} onChange={(e) => setAuthForm({ ...authForm, email: e.target.value })} placeholder="jane@email.com" required />
-                </div>
-                <div>
-                  <Label htmlFor="phone">Phone</Label>
-                  <Input id="phone" type="tel" value={authForm.phone} onChange={(e) => setAuthForm({ ...authForm, phone: e.target.value })} placeholder="(555) 000-0000" required />
-                </div>
-                <Button type="submit" className="w-full">Get Started</Button>
-              </form>
+              {authTab === 'signin' ? (
+                <form onSubmit={handleSignIn} className="space-y-4">
+                  <div>
+                    <Label htmlFor="email">Email</Label>
+                    <Input id="email" type="email" value={authForm.email} onChange={(e) => setAuthForm({ ...authForm, email: e.target.value })} placeholder="jane@email.com" required />
+                  </div>
+                  <div>
+                    <Label htmlFor="password">Password</Label>
+                    <Input id="password" type="password" value={authForm.password} onChange={(e) => setAuthForm({ ...authForm, password: e.target.value })} placeholder="••••••••" required />
+                  </div>
+                  {authError && <p className="text-sm text-red-500">{authError}</p>}
+                  <Button type="submit" className="w-full" disabled={authLoading}>
+                    {authLoading ? 'Signing in…' : 'Sign In'}
+                  </Button>
+                </form>
+              ) : (
+                <form onSubmit={handleSignUp} className="space-y-4">
+                  <div>
+                    <Label htmlFor="name">Full Name</Label>
+                    <Input id="name" value={authForm.name} onChange={(e) => setAuthForm({ ...authForm, name: e.target.value })} placeholder="Jane Smith" required />
+                  </div>
+                  <div>
+                    <Label htmlFor="su-email">Email</Label>
+                    <Input id="su-email" type="email" value={authForm.email} onChange={(e) => setAuthForm({ ...authForm, email: e.target.value })} placeholder="jane@email.com" required />
+                  </div>
+                  <div>
+                    <Label htmlFor="su-password">Password</Label>
+                    <Input id="su-password" type="password" value={authForm.password} onChange={(e) => setAuthForm({ ...authForm, password: e.target.value })} placeholder="••••••••" required minLength={8} />
+                  </div>
+                  {authError && <p className="text-sm text-red-500">{authError}</p>}
+                  <Button type="submit" className="w-full" disabled={authLoading}>
+                    {authLoading ? 'Creating account…' : 'Get Started'}
+                  </Button>
+                </form>
+              )}
             </CardContent>
           </Card>
         </div>
@@ -285,6 +394,7 @@ export default function CustomerApp() {
   }
 
   // ── SCHEDULE ──────────────────────────────────────────────────────────────
+
   if (step === 'schedule') {
     return (
       <div className="min-h-screen bg-gradient-to-br from-blue-50 to-indigo-100 p-4">
@@ -294,9 +404,7 @@ export default function CustomerApp() {
             <CardHeader>
               <CardTitle>Schedule Pickup</CardTitle>
               {nearestLaundromat && (
-                <p className="text-sm text-gray-600">
-                  Connected to: <strong>{nearestLaundromat.name}</strong>
-                </p>
+                <p className="text-sm text-gray-600">Connected to: <strong>{nearestLaundromat.name}</strong></p>
               )}
             </CardHeader>
             <CardContent className="space-y-5">
@@ -320,31 +428,27 @@ export default function CustomerApp() {
                   ))}
                 </div>
               </div>
-
               <div>
-                <Label htmlFor="datetime">Pickup Date & Time</Label>
+                <Label htmlFor="datetime">Pickup Date &amp; Time</Label>
                 <Input id="datetime" type="datetime-local" value={scheduledPickup} onChange={(e) => setScheduledPickup(e.target.value)} required />
               </div>
-
               <div>
                 <Label htmlFor="notes">Special Instructions <span className="text-gray-400 font-normal">(optional)</span></Label>
                 <Textarea
                   id="notes"
-                  placeholder="E.g., Ring doorbell, separate darks/lights, fragrance-free detergent..."
+                  placeholder="E.g., Ring doorbell, separate darks/lights, fragrance-free detergent…"
                   value={orderNotes}
                   onChange={(e) => setOrderNotes(e.target.value)}
                   className="resize-none"
                   rows={3}
                 />
               </div>
-
               <div className="border rounded-lg p-4 bg-gray-50">
                 <p className="text-sm font-medium mb-2 flex items-center gap-1"><Calendar className="h-4 w-4" /> Want recurring pickups?</p>
                 <Button type="button" variant="outline" size="sm" onClick={() => setShowSubscriptionModal(true)} className="w-full">
                   Set Up Subscription
                 </Button>
               </div>
-
               <Button
                 onClick={() => { if (selectedService && scheduledPickup) setStep('payment'); }}
                 className="w-full"
@@ -390,7 +494,7 @@ export default function CustomerApp() {
               </div>
               <div className="flex gap-2">
                 <Button variant="outline" onClick={() => setShowSubscriptionModal(false)} className="flex-1">Cancel</Button>
-                <Button onClick={createSubscription} className="flex-1">Create Subscription</Button>
+                <Button onClick={handleCreateSubscription} className="flex-1">Create Subscription</Button>
               </div>
             </div>
           </DialogContent>
@@ -400,8 +504,9 @@ export default function CustomerApp() {
   }
 
   // ── PAYMENT ───────────────────────────────────────────────────────────────
+
   if (step === 'payment') {
-    const basePrice = selectedService?.price || 0;
+    const basePrice = selectedService?.price ?? 0;
     const finalPrice = Math.max(0, basePrice - promoDiscount);
     const fee = calculatePlatformFee(finalPrice);
     return (
@@ -411,7 +516,7 @@ export default function CustomerApp() {
           <Card>
             <CardHeader>
               <CardTitle className="flex items-center gap-2">
-                <CreditCard className="h-5 w-5" /> Review & Pay
+                <CreditCard className="h-5 w-5" /> Review &amp; Pay
               </CardTitle>
             </CardHeader>
             <CardContent className="space-y-5">
@@ -423,17 +528,19 @@ export default function CustomerApp() {
                 {orderNotes && <p className="text-sm text-gray-500 italic">"{orderNotes}"</p>}
               </div>
 
-              {/* Promo code */}
               <div className="space-y-2">
                 <Label className="flex items-center gap-1 text-sm"><Tag className="h-4 w-4" /> Promo Code</Label>
                 <div className="flex gap-2">
                   <Input
                     placeholder="Enter code"
                     value={promoCode}
-                    onChange={(e) => { setPromoCode(e.target.value.toUpperCase()); if (promoApplied) { setPromoApplied(false); setPromoDiscount(0); } }}
+                    onChange={(e) => {
+                      setPromoCode(e.target.value.toUpperCase());
+                      if (promoApplied) { setPromoApplied(false); setPromoDiscount(0); }
+                    }}
                     disabled={promoApplied}
                   />
-                  <Button type="button" variant="outline" onClick={applyPromoCode} disabled={promoApplied || !promoCode.trim()}>
+                  <Button type="button" variant="outline" onClick={handleApplyPromo} disabled={promoApplied || !promoCode.trim()}>
                     {promoApplied ? 'Applied' : 'Apply'}
                   </Button>
                 </div>
@@ -441,7 +548,6 @@ export default function CustomerApp() {
                 {promoApplied && <p className="text-sm text-green-600">Promo applied — saving ${promoDiscount.toFixed(2)}!</p>}
               </div>
 
-              {/* Order summary */}
               <div className="space-y-2 border-t pt-3">
                 <div className="flex justify-between text-sm"><span>Service</span><span>${basePrice.toFixed(2)}</span></div>
                 {promoDiscount > 0 && (
@@ -453,7 +559,6 @@ export default function CustomerApp() {
                 <div className="flex justify-between font-bold border-t pt-2"><span>Total</span><span>${(finalPrice + fee).toFixed(2)}</span></div>
               </div>
 
-              {/* Mock payment */}
               <div className="p-4 bg-gray-50 rounded-lg border border-dashed">
                 <p className="text-xs text-gray-400 uppercase tracking-wide mb-3">Payment details (demo)</p>
                 <div className="space-y-2">
@@ -465,8 +570,8 @@ export default function CustomerApp() {
                 </div>
               </div>
 
-              <Button onClick={handlePayment} className="w-full">
-                Pay ${(finalPrice + fee).toFixed(2)}
+              <Button onClick={handlePayment} className="w-full" disabled={isProcessing}>
+                {isProcessing ? 'Processing…' : `Pay $${(finalPrice + fee).toFixed(2)}`}
               </Button>
             </CardContent>
           </Card>
@@ -475,10 +580,10 @@ export default function CustomerApp() {
     );
   }
 
-  // ── MAIN APP (address/orders/subscriptions/tracking) ──────────────────────
+  // ── MAIN APP ──────────────────────────────────────────────────────────────
+
   return (
     <div className="min-h-screen bg-gradient-to-br from-blue-50 to-indigo-100">
-      {/* Nav */}
       <header className="bg-white border-b px-4 py-3 sticky top-0 z-10">
         <div className="mx-auto max-w-md flex items-center justify-between">
           <div className="flex items-center gap-2">
@@ -502,7 +607,7 @@ export default function CustomerApp() {
           </div>
         </div>
         <div className="mx-auto max-w-md flex justify-around mt-2 border-t pt-2">
-          {(['home','orders','subscriptions'] as const).map(tab => {
+          {(['home', 'orders', 'subscriptions'] as const).map(tab => {
             const icons = { home: <Home className="h-4 w-4" />, orders: <History className="h-4 w-4" />, subscriptions: <Calendar className="h-4 w-4" /> };
             const labels = { home: 'Home', orders: 'Orders', subscriptions: 'Plans' };
             return (
@@ -527,7 +632,7 @@ export default function CustomerApp() {
                   {step === 'tracking' && currentOrder && (
                     <div className="p-3 bg-blue-50 border border-blue-200 rounded-lg flex items-center justify-between">
                       <div>
-                        <p className="text-sm font-medium">Active order #{currentOrder.id.slice(0,8)}</p>
+                        <p className="text-sm font-medium">Active order #{currentOrder.id.slice(0, 8)}</p>
                         <p className="text-xs text-gray-500">{statusLabel[currentOrder.status]}</p>
                       </div>
                       <Button size="sm" variant="outline" onClick={() => setActiveTab('orders')}>Track</Button>
@@ -600,24 +705,21 @@ export default function CustomerApp() {
                   </CardContent>
                 </Card>
               ) : (
-                subscriptions.map(sub => {
-                  const svc = db.services.getById(sub.serviceId);
-                  return (
-                    <Card key={sub.id}>
-                      <CardContent className="p-4">
-                        <div className="flex items-start justify-between">
-                          <div>
-                            <p className="font-medium">{svc?.name ?? 'Service'}</p>
-                            <p className="text-sm text-gray-600 capitalize">{sub.frequency} · {sub.pickupDay}s</p>
-                            <p className="text-sm text-gray-500">Next pickup: {new Date(sub.nextPickup).toLocaleDateString()}</p>
-                            <p className="text-sm font-medium mt-1">${sub.price.toFixed(2)} / pickup</p>
-                          </div>
-                          <Button variant="destructive" size="sm" onClick={() => cancelSubscription(sub.id)}>Cancel</Button>
+                subscriptions.map(sub => (
+                  <Card key={sub.id}>
+                    <CardContent className="p-4">
+                      <div className="flex items-start justify-between">
+                        <div>
+                          <p className="font-medium">{serviceNames[sub.serviceId] ?? 'Service'}</p>
+                          <p className="text-sm text-gray-600 capitalize">{sub.frequency} · {sub.pickupDay}s</p>
+                          <p className="text-sm text-gray-500">Next pickup: {new Date(sub.nextPickup).toLocaleDateString()}</p>
+                          <p className="text-sm font-medium mt-1">${sub.price.toFixed(2)} / pickup</p>
                         </div>
-                      </CardContent>
-                    </Card>
-                  );
-                })
+                        <Button variant="destructive" size="sm" onClick={() => handleCancelSubscription(sub.id)}>Cancel</Button>
+                      </div>
+                    </CardContent>
+                  </Card>
+                ))
               )}
             </div>
           )}
@@ -637,11 +739,10 @@ export default function CustomerApp() {
                   <p><Clock className="h-3 w-3 inline mr-1" />{new Date(currentOrder.scheduledPickup).toLocaleString()}</p>
                   {currentOrder.notes && <p className="italic">"{currentOrder.notes}"</p>}
                 </div>
-
                 {currentOrder.status !== 'cancelled' && (
                   <div className="space-y-2">
-                    {['pending','picked_up','in_progress','delivered'].map((s, idx) => {
-                      const steps = ['pending','picked_up','in_progress','delivered'];
+                    {['pending', 'picked_up', 'in_progress', 'delivered'].map((s, idx) => {
+                      const steps = ['pending', 'picked_up', 'in_progress', 'delivered'];
                       const active = steps.indexOf(currentOrder.status) >= idx;
                       return (
                         <div key={s} className="flex items-center gap-3">
@@ -654,7 +755,6 @@ export default function CustomerApp() {
                     })}
                   </div>
                 )}
-
                 <div className="flex gap-2 pt-2">
                   {currentOrder.status === 'pending' && (
                     <Button variant="destructive" size="sm" onClick={() => cancelOrder(currentOrder.id)} className="flex-1">
@@ -681,7 +781,7 @@ export default function CustomerApp() {
               <h2 className="font-semibold">Notifications</h2>
               <div className="flex items-center gap-2">
                 {unreadCount > 0 && (
-                  <Button variant="ghost" size="sm" onClick={markAllRead} className="text-xs text-blue-600">
+                  <Button variant="ghost" size="sm" onClick={handleMarkAllRead} className="text-xs text-blue-600">
                     Mark all read
                   </Button>
                 )}
@@ -701,10 +801,7 @@ export default function CustomerApp() {
                   <div
                     key={n.id}
                     className={`p-4 cursor-pointer transition-colors hover:bg-gray-50 ${n.isRead ? '' : 'bg-blue-50'}`}
-                    onClick={() => {
-                      db.notifications.markAsRead(n.id);
-                      if (user) loadData(user.id);
-                    }}
+                    onClick={() => handleMarkNotifRead(n.id)}
                   >
                     <div className="flex items-start gap-3">
                       <div className={`mt-2 h-2 w-2 rounded-full shrink-0 ${n.isRead ? 'bg-gray-300' : 'bg-blue-500'}`} />

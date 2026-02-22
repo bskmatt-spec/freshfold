@@ -1,8 +1,18 @@
 'use client';
 
-import { useEffect, useState } from 'react';
-import { db } from '@/lib/db';
-import { User, Order, OrderWithDetails, Laundromat, Service, Notification, Subscription, RECOMMENDED_SERVICES } from '@/lib/types';
+import { useEffect, useState, useCallback } from 'react';
+import { useRouter } from 'next/navigation';
+import { authClient, useSession } from '@/lib/auth/client';
+import {
+  getLaundromatById, getOrdersByLaundromat, getAvailableOrdersForDriver,
+  getDriversByLaundromat, getServicesByLaundromat, createDefaultServices,
+  createService, updateService, deleteService as deleteServiceAction,
+  updateOrder, createOrderStatusNotification,
+  getNotificationsByUser, getUnreadNotificationsByUser, markNotificationRead,
+  getSubscriptionsByLaundromat, getServiceById, getUserById, updateUser,
+} from '@/lib/actions';
+import { RECOMMENDED_SERVICES } from '@/lib/types';
+import type { Order, Laundromat, Service, Notification, Subscription, User } from '@/db/schema';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
@@ -11,168 +21,208 @@ import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
 import { Badge } from '@/components/ui/badge';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogTrigger } from '@/components/ui/dialog';
-import { Package, Truck, CheckCircle, Clock, MapPin, User as UserIcon, Store, QrCode, DollarSign, Plus, Edit, Trash2, Sparkles, Bell, X, FileText, RefreshCw } from 'lucide-react';
+import {
+  Package, Truck, CheckCircle, Clock, MapPin, User as UserIcon, Store,
+  QrCode, DollarSign, Plus, Edit, Trash2, Sparkles, Bell, X, FileText, RefreshCw,
+} from 'lucide-react';
 
 export default function LaundromatPortal() {
-  const [user, setUser] = useState<User | null>(null);
+  const { data: session, isPending } = useSession();
+  const router = useRouter();
+
+  // Auth form
+  const [authForm, setAuthForm] = useState({ email: '', password: '', laundromatId: '' });
+  const [authError, setAuthError] = useState('');
+  const [authLoading, setAuthLoading] = useState(false);
+  const [authTab, setAuthTab] = useState<'signin' | 'signup'>('signin');
+
+  // Portal state
   const [laundromat, setLaundromat] = useState<Laundromat | null>(null);
-  const [orders, setOrders] = useState<OrderWithDetails[]>([]);
-  const [availableOrders, setAvailableOrders] = useState<OrderWithDetails[]>([]);
+  const [laundromatIdInput, setLaundromatIdInput] = useState('');
+  const [laundromatError, setLaundromatError] = useState('');
+  const [orders, setOrders] = useState<Order[]>([]);
+  const [availableOrders, setAvailableOrders] = useState<Order[]>([]);
   const [drivers, setDrivers] = useState<User[]>([]);
   const [services, setServices] = useState<Service[]>([]);
+  const [subscriptions, setSubscriptions] = useState<Subscription[]>([]);
+  const [subCustomers, setSubCustomers] = useState<Record<string, User | null>>({});
+  const [subServices, setSubServices] = useState<Record<string, Service | null>>({});
   const [activeTab, setActiveTab] = useState('orders');
-  const [authForm, setAuthForm] = useState({ email: '', laundromatId: '' });
   const [showQR, setShowQR] = useState(false);
   const [editingService, setEditingService] = useState<Service | null>(null);
   const [showAddService, setShowAddService] = useState(false);
-  const [newService, setNewService] = useState({
-    name: '',
-    description: '',
-    price: '',
-    useTemplate: ''
-  });
+  const [newService, setNewService] = useState({ name: '', description: '', price: '', useTemplate: '' });
   const [notifications, setNotifications] = useState<Notification[]>([]);
   const [unreadCount, setUnreadCount] = useState(0);
   const [showNotifications, setShowNotifications] = useState(false);
-  const [subscriptions, setSubscriptions] = useState<Subscription[]>([]);
+  const [orderCustomers, setOrderCustomers] = useState<Record<string, User | null>>({});
 
+  const loadData = useCallback(async (lId: string, userId: string) => {
+    const [lOrders, avail, driverList, svcs, notifs, unread, subs] = await Promise.all([
+      getOrdersByLaundromat(lId),
+      getAvailableOrdersForDriver(lId),
+      getDriversByLaundromat(lId),
+      getServicesByLaundromat(lId),
+      getNotificationsByUser(userId),
+      getUnreadNotificationsByUser(userId),
+      getSubscriptionsByLaundromat(lId),
+    ]);
+    setOrders(lOrders);
+    setAvailableOrders(avail);
+    setDrivers(driverList);
+    setServices(svcs.length > 0 ? svcs : await createDefaultServices(lId));
+    setNotifications(notifs);
+    setUnreadCount(unread.length);
+    setSubscriptions(subs);
+
+    // Resolve customer names for orders
+    const customerIds = [...new Set(lOrders.map(o => o.customerId))];
+    const customers: Record<string, User | null> = {};
+    await Promise.all(customerIds.map(async id => {
+      customers[id] = await getUserById(id);
+    }));
+    setOrderCustomers(customers);
+
+    // Resolve sub customers + services
+    const subCustomerIds = [...new Set(subs.map(s => s.customerId))];
+    const subSvcIds = [...new Set(subs.map(s => s.serviceId))];
+    const subCusts: Record<string, User | null> = {};
+    const subSvcs: Record<string, Service | null> = {};
+    await Promise.all([
+      ...subCustomerIds.map(async id => { subCusts[id] = await getUserById(id); }),
+      ...subSvcIds.map(async id => { subSvcs[id] = await getServiceById(id); }),
+    ]);
+    setSubCustomers(subCusts);
+    setSubServices(subSvcs);
+  }, []);
+
+  // Load data when session + laundromat are ready
   useEffect(() => {
-    db.init();
-    const savedUser = localStorage.getItem('laundromat_user');
-    if (savedUser) {
-      const parsed = JSON.parse(savedUser);
-      setUser(parsed);
-      const l = db.laundromats.getById(parsed.laundromatId!);
-      if (l) {
-        setLaundromat(l);
-        loadData(l.id, parsed.id);
-      }
+    if (!isPending && session?.user && laundromat) {
+      loadData(laundromat.id, session.user.id);
+    }
+  }, [session, isPending, laundromat, loadData]);
+
+  // Restore laundromat from localStorage
+  useEffect(() => {
+    const saved = localStorage.getItem('laundromat_portal_id');
+    if (saved) {
+      getLaundromatById(saved).then(l => { if (l) setLaundromat(l); });
     }
   }, []);
 
-  const loadData = (laundromatId: string, userId?: string) => {
-    const laundromatOrders = db.orders.getByLaundromat(laundromatId).map(o => db.orders.withDetails(o));
-    setOrders(laundromatOrders);
+  // ── AUTH ──────────────────────────────────────────────────────────────────
 
-    const available = db.orders.getAvailableForDriver()
-      .filter(o => o.laundromatId === laundromatId)
-      .map(o => db.orders.withDetails(o));
-    setAvailableOrders(available);
-
-    const allUsers = db.users.getAll();
-    setDrivers(allUsers.filter(u => u.role === 'driver' && u.laundromatId === laundromatId));
-
-    const laundromatServices = db.services.getByLaundromat(laundromatId);
-    if (laundromatServices.length === 0) {
-      const defaults = db.services.createDefaultsForLaundromat(laundromatId);
-      setServices(defaults);
-    } else {
-      setServices(laundromatServices);
-    }
-
-    const resolvedUserId = userId ?? user?.id;
-    if (resolvedUserId) {
-      setNotifications(db.notifications.getByUser(resolvedUserId));
-      setUnreadCount(db.notifications.getUnreadByUser(resolvedUserId).length);
-    }
-
-    setSubscriptions(db.subscriptions.getByLaundromat(laundromatId));
+  const handleSignIn = async (e: React.FormEvent) => {
+    e.preventDefault();
+    setAuthLoading(true); setAuthError('');
+    const { error } = await authClient.signIn.email({
+      email: authForm.email, password: authForm.password,
+    });
+    setAuthLoading(false);
+    if (error) setAuthError(error.message ?? 'Invalid credentials');
   };
 
-  const handleAuth = (e: React.FormEvent) => {
+  const handleSignUp = async (e: React.FormEvent) => {
     e.preventDefault();
-    const l = db.laundromats.getById(authForm.laundromatId);
-    if (!l) {
-      alert('Invalid laundromat ID');
-      return;
-    }
+    setAuthLoading(true); setAuthError('');
+    const { error } = await authClient.signUp.email({
+      name: 'Staff Member', email: authForm.email, password: authForm.password,
+    });
+    setAuthLoading(false);
+    if (error) setAuthError(error.message ?? 'Sign up failed');
+  };
 
-    let existingUser = db.users.getByEmail(authForm.email);
-    if (!existingUser) {
-      existingUser = db.users.create({
-        email: authForm.email,
-        name: 'Staff Member',
-        phone: '',
-        role: 'laundromat_staff',
-        laundromatId: l.id
-      });
-    } else if (existingUser.role !== 'laundromat_staff' && existingUser.role !== 'driver') {
-      existingUser = db.users.update(existingUser.id, { role: 'laundromat_staff', laundromatId: l.id })!;
-    }
+  const handleSignOut = async () => {
+    await authClient.signOut();
+    localStorage.removeItem('bearer_token');
+    localStorage.removeItem('laundromat_portal_id');
+    setLaundromat(null);
+    router.refresh();
+  };
 
-    setUser(existingUser);
+  const handleConnectLaundromat = async (e: React.FormEvent) => {
+    e.preventDefault();
+    setLaundromatError('');
+    const l = await getLaundromatById(laundromatIdInput.trim());
+    if (!l) { setLaundromatError('Invalid laundromat ID'); return; }
+    // Set role to laundromat_staff if needed
+    if (session?.user && session.user.role === 'customer') {
+      await updateUser(session.user.id, { role: 'laundromat_staff', laundromatId: l.id });
+    }
+    localStorage.setItem('laundromat_portal_id', l.id);
     setLaundromat(l);
-    localStorage.setItem('laundromat_user', JSON.stringify(existingUser));
-    loadData(l.id, existingUser.id);
   };
 
-  const updateOrderStatus = (orderId: string, status: Order['status']) => {
-    const order = db.orders.getById(orderId);
-    if (order) {
-      db.orders.update(orderId, { status });
-      db.notifications.createOrderStatusNotification(order.customerId, orderId, status);
-      if (laundromat) loadData(laundromat.id);
-    }
+  // ── ORDER ACTIONS ─────────────────────────────────────────────────────────
+
+  const updateOrderStatus = async (orderId: string, status: Order['status']) => {
+    const order = orders.find(o => o.id === orderId);
+    if (!order || !laundromat || !session?.user) return;
+    await updateOrder(orderId, { status });
+    await createOrderStatusNotification(order.customerId, orderId, status);
+    await loadData(laundromat.id, session.user.id);
   };
 
-  const assignDriver = (orderId: string, driverId: string) => {
-    db.orders.update(orderId, { driverId, status: 'picked_up' });
-    if (laundromat) loadData(laundromat.id);
+  const assignDriver = async (orderId: string, driverId: string) => {
+    if (!laundromat || !session?.user) return;
+    await updateOrder(orderId, { driverId, status: 'picked_up' });
+    await loadData(laundromat.id, session.user.id);
   };
 
-  const acceptOrder = (orderId: string) => {
-    if (!user) return;
-    db.orders.update(orderId, { driverId: user.id, status: 'picked_up' });
-    if (laundromat) loadData(laundromat.id);
+  const acceptOrder = async (orderId: string) => {
+    if (!laundromat || !session?.user) return;
+    await updateOrder(orderId, { driverId: session.user.id, status: 'picked_up' });
+    await loadData(laundromat.id, session.user.id);
   };
 
-  const handleUpdateService = (e: React.FormEvent) => {
+  // ── SERVICE ACTIONS ───────────────────────────────────────────────────────
+
+  const handleUpdateService = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (!editingService) return;
-    
-    db.services.update(editingService.id, {
+    if (!editingService || !laundromat || !session?.user) return;
+    await updateService(editingService.id, {
       name: editingService.name,
       description: editingService.description,
-      price: editingService.price
+      price: editingService.price,
     });
-    
     setEditingService(null);
-    if (laundromat) loadData(laundromat.id);
+    await loadData(laundromat.id, session.user.id);
   };
 
-  const handleAddService = (e: React.FormEvent) => {
+  const handleAddService = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (!laundromat) return;
-    
-    let template = RECOMMENDED_SERVICES.find(t => t.name === newService.useTemplate);
-    
-    db.services.create({
+    if (!laundromat || !session?.user) return;
+    const template = RECOMMENDED_SERVICES.find(t => t.name === newService.useTemplate);
+    await createService({
       laundromatId: laundromat.id,
       name: template ? template.name : newService.name,
       description: template ? template.description : newService.description,
       price: parseFloat(newService.price) || (template ? template.recommendedPrice : 0),
       recommendedPrice: template ? template.recommendedPrice : (parseFloat(newService.price) || 0),
-      isActive: true
+      isActive: true,
     });
-    
     setNewService({ name: '', description: '', price: '', useTemplate: '' });
     setShowAddService(false);
-    loadData(laundromat.id);
+    await loadData(laundromat.id, session.user.id);
   };
 
-  const toggleServiceStatus = (serviceId: string) => {
-    const service = services.find(s => s.id === serviceId);
-    if (service) {
-      db.services.update(serviceId, { isActive: !service.isActive });
-      if (laundromat) loadData(laundromat.id);
-    }
+  const toggleServiceStatus = async (serviceId: string) => {
+    const svc = services.find(s => s.id === serviceId);
+    if (!svc || !laundromat || !session?.user) return;
+    await updateService(serviceId, { isActive: !svc.isActive });
+    await loadData(laundromat.id, session.user.id);
   };
 
-  const deleteService = (serviceId: string) => {
-    if (confirm('Delete this service?')) {
-      db.services.delete(serviceId);
-      if (laundromat) loadData(laundromat.id);
-    }
+  const handleDeleteService = async (serviceId: string) => {
+    if (!confirm('Delete this service?') || !laundromat || !session?.user) return;
+    await deleteServiceAction(serviceId);
+    await loadData(laundromat.id, session.user.id);
+  };
+
+  const handleMarkNotifRead = async (id: string) => {
+    await markNotificationRead(id);
+    if (laundromat && session?.user) await loadData(laundromat.id, session.user.id);
   };
 
   const getStatusIcon = (status: string) => {
@@ -187,23 +237,30 @@ export default function LaundromatPortal() {
 
   const getStatusLabel = (status: string) => {
     const labels: Record<string, string> = {
-      pending: 'Pending',
-      picked_up: 'Picked Up',
-      in_progress: 'In Progress',
-      delivered: 'Delivered',
-      cancelled: 'Cancelled'
+      pending: 'Pending', picked_up: 'Picked Up',
+      in_progress: 'In Progress', delivered: 'Delivered', cancelled: 'Cancelled',
     };
-    return labels[status] || status;
+    return labels[status] ?? status;
   };
 
-  const markNotificationRead = (notificationId: string) => {
-    db.notifications.markAsRead(notificationId);
-    if (user && laundromat) {
-      loadData(laundromat.id);
-    }
-  };
+  // ── LOADING ───────────────────────────────────────────────────────────────
 
-  if (!user || !laundromat) {
+  if (isPending) {
+    return (
+      <div className="min-h-screen bg-gray-50 flex items-center justify-center">
+        <div className="text-center">
+          <div className="h-12 w-12 rounded-full bg-indigo-500 flex items-center justify-center mx-auto mb-3 animate-pulse">
+            <Store className="h-6 w-6 text-white" />
+          </div>
+          <p className="text-gray-500">Loading…</p>
+        </div>
+      </div>
+    );
+  }
+
+  // ── AUTH SCREEN ───────────────────────────────────────────────────────────
+
+  if (!session?.user) {
     return (
       <div className="min-h-screen bg-gray-50 p-4">
         <div className="mx-auto max-w-md pt-12">
@@ -213,38 +270,95 @@ export default function LaundromatPortal() {
                 <Store className="h-8 w-8 text-white" />
               </div>
               <CardTitle className="text-2xl">Laundromat Portal</CardTitle>
+              <div className="flex gap-2 mt-3">
+                <button onClick={() => setAuthTab('signin')}
+                  className={`flex-1 py-2 text-sm font-medium rounded-lg transition-colors ${authTab === 'signin' ? 'bg-indigo-100 text-indigo-700' : 'text-gray-500 hover:bg-gray-50'}`}>
+                  Sign In
+                </button>
+                <button onClick={() => setAuthTab('signup')}
+                  className={`flex-1 py-2 text-sm font-medium rounded-lg transition-colors ${authTab === 'signup' ? 'bg-indigo-100 text-indigo-700' : 'text-gray-500 hover:bg-gray-50'}`}>
+                  Create Account
+                </button>
+              </div>
             </CardHeader>
             <CardContent>
-              <form onSubmit={handleAuth} className="space-y-4">
-                <div>
-                  <Label htmlFor="email">Email</Label>
-                  <Input 
-                    id="email" 
-                    type="email" 
-                    value={authForm.email} 
-                    onChange={(e) => setAuthForm({...authForm, email: e.target.value})}
-                    placeholder="staff@laundromat.com"
-                    required 
-                  />
-                </div>
-                <div>
-                  <Label htmlFor="laundromatId">Laundromat ID</Label>
-                  <Input 
-                    id="laundromatId" 
-                    value={authForm.laundromatId} 
-                    onChange={(e) => setAuthForm({...authForm, laundromatId: e.target.value})}
-                    placeholder="Enter laundromat ID"
-                    required 
-                  />
-                </div>
-                <Button type="submit" className="w-full">Sign In</Button>
-              </form>
+              {authTab === 'signin' ? (
+                <form onSubmit={handleSignIn} className="space-y-4">
+                  <div>
+                    <Label htmlFor="email">Email</Label>
+                    <Input id="email" type="email" value={authForm.email} onChange={(e) => setAuthForm({ ...authForm, email: e.target.value })} placeholder="staff@laundromat.com" required />
+                  </div>
+                  <div>
+                    <Label htmlFor="password">Password</Label>
+                    <Input id="password" type="password" value={authForm.password} onChange={(e) => setAuthForm({ ...authForm, password: e.target.value })} placeholder="••••••••" required />
+                  </div>
+                  {authError && <p className="text-sm text-red-500">{authError}</p>}
+                  <Button type="submit" className="w-full" disabled={authLoading}>
+                    {authLoading ? 'Signing in…' : 'Sign In'}
+                  </Button>
+                </form>
+              ) : (
+                <form onSubmit={handleSignUp} className="space-y-4">
+                  <div>
+                    <Label htmlFor="su-email">Email</Label>
+                    <Input id="su-email" type="email" value={authForm.email} onChange={(e) => setAuthForm({ ...authForm, email: e.target.value })} placeholder="staff@laundromat.com" required />
+                  </div>
+                  <div>
+                    <Label htmlFor="su-password">Password</Label>
+                    <Input id="su-password" type="password" value={authForm.password} onChange={(e) => setAuthForm({ ...authForm, password: e.target.value })} placeholder="••••••••" required minLength={8} />
+                  </div>
+                  {authError && <p className="text-sm text-red-500">{authError}</p>}
+                  <Button type="submit" className="w-full" disabled={authLoading}>
+                    {authLoading ? 'Creating account…' : 'Create Account'}
+                  </Button>
+                </form>
+              )}
             </CardContent>
           </Card>
         </div>
       </div>
     );
   }
+
+  // ── LAUNDROMAT CONNECT SCREEN ─────────────────────────────────────────────
+
+  if (!laundromat) {
+    return (
+      <div className="min-h-screen bg-gray-50 p-4">
+        <div className="mx-auto max-w-md pt-12">
+          <Card>
+            <CardHeader className="text-center">
+              <div className="mx-auto mb-4 flex h-16 w-16 items-center justify-center rounded-full bg-indigo-500">
+                <Store className="h-8 w-8 text-white" />
+              </div>
+              <CardTitle className="text-xl">Connect Your Laundromat</CardTitle>
+              <p className="text-sm text-gray-500 mt-1">Signed in as {session.user.email}</p>
+            </CardHeader>
+            <CardContent>
+              <form onSubmit={handleConnectLaundromat} className="space-y-4">
+                <div>
+                  <Label htmlFor="laundromatId">Laundromat ID</Label>
+                  <Input
+                    id="laundromatId"
+                    value={laundromatIdInput}
+                    onChange={(e) => setLaundromatIdInput(e.target.value)}
+                    placeholder="Enter laundromat ID from admin panel"
+                    required
+                  />
+                  <p className="text-xs text-gray-500 mt-1">Get this from your Admin Dashboard → Laundromats tab</p>
+                </div>
+                {laundromatError && <p className="text-sm text-red-500">{laundromatError}</p>}
+                <Button type="submit" className="w-full">Connect</Button>
+              </form>
+              <Button variant="ghost" className="w-full mt-2" onClick={handleSignOut}>Sign Out</Button>
+            </CardContent>
+          </Card>
+        </div>
+      </div>
+    );
+  }
+
+  // ── MAIN PORTAL ───────────────────────────────────────────────────────────
 
   return (
     <div className="min-h-screen bg-gray-50">
@@ -256,7 +370,7 @@ export default function LaundromatPortal() {
             </div>
             <div>
               <h1 className="font-semibold">{laundromat.name}</h1>
-              <p className="text-sm text-gray-500">{user.role === 'driver' ? 'Driver View' : 'Staff Portal'}</p>
+              <p className="text-sm text-gray-500">{session.user.role === 'driver' ? 'Driver View' : 'Staff Portal'}</p>
             </div>
           </div>
           <div className="flex gap-2">
@@ -275,32 +389,16 @@ export default function LaundromatPortal() {
                 </Button>
               </DialogTrigger>
               <DialogContent>
-                <DialogHeader>
-                  <DialogTitle>Your QR Code</DialogTitle>
-                </DialogHeader>
+                <DialogHeader><DialogTitle>Your QR Code</DialogTitle></DialogHeader>
                 <div className="flex flex-col items-center gap-4 py-6">
                   <div className="bg-white p-6 border-2 border-dashed rounded-lg">
-                    <div className="text-center">
-                      <p className="text-2xl font-mono font-bold tracking-wider">{laundromat.qrCode}</p>
-                    </div>
+                    <p className="text-2xl font-mono font-bold tracking-wider">{laundromat.qrCode}</p>
                   </div>
-                  <p className="text-sm text-gray-600 text-center">
-                    Customers can scan this code to access the app directly
-                  </p>
+                  <p className="text-sm text-gray-600 text-center">Customers can scan this code to access the app</p>
                 </div>
               </DialogContent>
             </Dialog>
-            <Button 
-              variant="ghost" 
-              size="sm"
-              onClick={() => {
-                localStorage.removeItem('laundromat_user');
-                setUser(null);
-                setLaundromat(null);
-              }}
-            >
-              Sign Out
-            </Button>
+            <Button variant="ghost" size="sm" onClick={handleSignOut}>Sign Out</Button>
           </div>
         </div>
       </header>
@@ -315,6 +413,7 @@ export default function LaundromatPortal() {
             <TabsTrigger value="drivers">Drivers</TabsTrigger>
           </TabsList>
 
+          {/* ORDERS */}
           <TabsContent value="orders" className="space-y-4">
             {orders.length === 0 ? (
               <Card>
@@ -324,83 +423,79 @@ export default function LaundromatPortal() {
                 </CardContent>
               </Card>
             ) : (
-              orders.map(order => (
-                <Card key={order.id}>
-                  <CardContent className="p-4">
-                    <div className="flex items-start justify-between mb-3">
-                      <div>
-                        <p className="font-medium">Order #{order.id.slice(0, 8)}</p>
-                        <p className="text-sm text-gray-600">{order.serviceName}</p>
-                        <div className="flex items-center gap-1 text-sm text-gray-600">
-                          {getStatusIcon(order.status)}
-                          <span>{getStatusLabel(order.status)}</span>
+              orders.map(order => {
+                const customer = orderCustomers[order.customerId];
+                return (
+                  <Card key={order.id}>
+                    <CardContent className="p-4">
+                      <div className="flex items-start justify-between mb-3">
+                        <div>
+                          <p className="font-medium">Order #{order.id.slice(0, 8)}</p>
+                          <p className="text-sm text-gray-600">{order.serviceName}</p>
+                          <div className="flex items-center gap-1 text-sm text-gray-600">
+                            {getStatusIcon(order.status)}
+                            <span>{getStatusLabel(order.status)}</span>
+                          </div>
                         </div>
+                        <Badge variant={order.status === 'delivered' ? 'default' : 'secondary'}>
+                          ${order.price.toFixed(2)}
+                        </Badge>
                       </div>
-                      <Badge variant={order.status === 'delivered' ? 'default' : 'secondary'}>
-                        ${order.price.toFixed(2)}
-                      </Badge>
-                    </div>
-
-                    <div className="space-y-2 text-sm">
-                      <div className="flex items-center gap-2">
-                        <UserIcon className="h-4 w-4 text-gray-400" />
-                        <span>{order.customer.name} - {order.customer.phone}</span>
+                      <div className="space-y-2 text-sm">
+                        <div className="flex items-center gap-2">
+                          <UserIcon className="h-4 w-4 text-gray-400" />
+                          <span>{customer?.name ?? '—'} {customer?.phone ? `- ${customer.phone}` : ''}</span>
+                        </div>
+                        <div className="flex items-center gap-2">
+                          <MapPin className="h-4 w-4 text-gray-400" />
+                          <span className="truncate">{order.pickupAddress}</span>
+                        </div>
+                        <div className="flex items-center gap-2">
+                          <Clock className="h-4 w-4 text-gray-400" />
+                          <span>{new Date(order.scheduledPickup).toLocaleString()}</span>
+                        </div>
+                        {order.notes && (
+                          <div className="flex items-start gap-2 p-2 bg-yellow-50 rounded">
+                            <FileText className="h-4 w-4 text-yellow-600 mt-0.5" />
+                            <span className="text-sm text-yellow-800">{order.notes}</span>
+                          </div>
+                        )}
                       </div>
-                      <div className="flex items-center gap-2">
-                        <MapPin className="h-4 w-4 text-gray-400" />
-                        <span className="truncate">{order.pickupAddress}</span>
-                      </div>
-                      <div className="flex items-center gap-2">
-                        <Clock className="h-4 w-4 text-gray-400" />
-                        <span>{new Date(order.scheduledPickup).toLocaleString()}</span>
-                      </div>
-                      {order.notes && (
-                        <div className="flex items-start gap-2 p-2 bg-yellow-50 rounded">
-                          <FileText className="h-4 w-4 text-yellow-600 mt-0.5" />
-                          <span className="text-sm text-yellow-800">{order.notes}</span>
+                      {order.status !== 'delivered' && order.status !== 'cancelled' && (
+                        <div className="mt-4 flex gap-2">
+                          {order.status === 'pending' && (
+                            <>
+                              <Select onValueChange={(v) => assignDriver(order.id, v)}>
+                                <SelectTrigger className="flex-1">
+                                  <SelectValue placeholder="Assign Driver" />
+                                </SelectTrigger>
+                                <SelectContent>
+                                  {drivers.map(driver => (
+                                    <SelectItem key={driver.id} value={driver.id}>{driver.name}</SelectItem>
+                                  ))}
+                                </SelectContent>
+                              </Select>
+                              <Button variant="destructive" onClick={() => updateOrderStatus(order.id, 'cancelled')}>Cancel</Button>
+                            </>
+                          )}
+                          {order.status === 'picked_up' && (
+                            <Button onClick={() => updateOrderStatus(order.id, 'in_progress')} className="flex-1">Start Processing</Button>
+                          )}
+                          {order.status === 'in_progress' && (
+                            <Button onClick={() => updateOrderStatus(order.id, 'delivered')} className="flex-1">Mark Delivered</Button>
+                          )}
                         </div>
                       )}
-                    </div>
-
-                     {order.status !== 'delivered' && order.status !== 'cancelled' && (
-                      <div className="mt-4 flex gap-2">
-                        {order.status === 'pending' && (
-                          <>
-                            <Select onValueChange={(v) => assignDriver(order.id, v)}>
-                              <SelectTrigger className="flex-1">
-                                <SelectValue placeholder="Assign Driver" />
-                              </SelectTrigger>
-                              <SelectContent>
-                                {drivers.map(driver => (
-                                  <SelectItem key={driver.id} value={driver.id}>{driver.name}</SelectItem>
-                                ))}
-                              </SelectContent>
-                            </Select>
-                            <Button variant="destructive" onClick={() => updateOrderStatus(order.id, 'cancelled')}>
-                              Cancel
-                            </Button>
-                          </>
-                        )}
-                        {order.status === 'picked_up' && (
-                          <Button onClick={() => updateOrderStatus(order.id, 'in_progress')} className="flex-1">
-                            Start Processing
-                          </Button>
-                        )}
-                        {order.status === 'in_progress' && (
-                          <Button onClick={() => updateOrderStatus(order.id, 'delivered')} className="flex-1">
-                            Mark Delivered
-                          </Button>
-                        )}
-                      </div>
-                    )}
-                  </CardContent>
-                </Card>
-              ))
+                    </CardContent>
+                  </Card>
+                );
+              })
             )}
           </TabsContent>
 
+          {/* AVAILABLE */}
           <TabsContent value="available" className="space-y-4">
-            {user?.role === 'driver' ? (
+            {session.user.role === 'driver' ? (
               availableOrders.length === 0 ? (
                 <Card>
                   <CardContent className="py-12 text-center text-gray-500">
@@ -423,9 +518,7 @@ export default function LaundromatPortal() {
                         <p><MapPin className="h-4 w-4 inline mr-1" />{order.pickupAddress}</p>
                         <p><Clock className="h-4 w-4 inline mr-1" />{new Date(order.scheduledPickup).toLocaleString()}</p>
                       </div>
-                      <Button onClick={() => acceptOrder(order.id)} className="w-full mt-3">
-                        Accept Order
-                      </Button>
+                      <Button onClick={() => acceptOrder(order.id)} className="w-full mt-3">Accept Order</Button>
                     </CardContent>
                   </Card>
                 ))
@@ -439,6 +532,7 @@ export default function LaundromatPortal() {
             )}
           </TabsContent>
 
+          {/* SERVICES */}
           <TabsContent value="services" className="space-y-4">
             <Card>
               <CardHeader className="flex flex-row items-center justify-between">
@@ -459,9 +553,7 @@ export default function LaundromatPortal() {
                             <p className="font-medium">{service.name}</p>
                             {!service.isActive && <Badge variant="secondary">Inactive</Badge>}
                             {service.price !== service.recommendedPrice && (
-                              <Badge variant="outline" className="text-orange-600 border-orange-200">
-                                Custom Price
-                              </Badge>
+                              <Badge variant="outline" className="text-orange-600 border-orange-200">Custom Price</Badge>
                             )}
                           </div>
                           <p className="text-sm text-gray-600">{service.description}</p>
@@ -470,31 +562,17 @@ export default function LaundromatPortal() {
                               <DollarSign className="h-4 w-4 text-gray-400" />
                               <span className="font-bold">${service.price.toFixed(2)}</span>
                             </div>
-                            <div className="text-sm text-gray-500">
-                              Recommended: ${service.recommendedPrice.toFixed(2)}
-                            </div>
+                            <div className="text-sm text-gray-500">Recommended: ${service.recommendedPrice.toFixed(2)}</div>
                           </div>
                         </div>
                         <div className="flex gap-1">
-                          <Button 
-                            variant="ghost" 
-                            size="sm"
-                            onClick={() => setEditingService(service)}
-                          >
+                          <Button variant="ghost" size="sm" onClick={() => setEditingService(service)}>
                             <Edit className="h-4 w-4" />
                           </Button>
-                          <Button 
-                            variant="ghost" 
-                            size="sm"
-                            onClick={() => toggleServiceStatus(service.id)}
-                          >
+                          <Button variant="ghost" size="sm" onClick={() => toggleServiceStatus(service.id)}>
                             {service.isActive ? 'Disable' : 'Enable'}
                           </Button>
-                          <Button 
-                            variant="ghost" 
-                            size="sm"
-                            onClick={() => deleteService(service.id)}
-                          >
+                          <Button variant="ghost" size="sm" onClick={() => handleDeleteService(service.id)}>
                             <Trash2 className="h-4 w-4 text-red-500" />
                           </Button>
                         </div>
@@ -506,11 +584,10 @@ export default function LaundromatPortal() {
             </Card>
           </TabsContent>
 
+          {/* SUBSCRIPTIONS */}
           <TabsContent value="subscriptions">
             <Card>
-              <CardHeader>
-                <CardTitle>Active Subscription Plans</CardTitle>
-              </CardHeader>
+              <CardHeader><CardTitle>Active Subscription Plans</CardTitle></CardHeader>
               <CardContent>
                 {subscriptions.length === 0 ? (
                   <div className="py-12 text-center text-gray-500">
@@ -520,8 +597,8 @@ export default function LaundromatPortal() {
                 ) : (
                   <div className="space-y-3">
                     {subscriptions.map(sub => {
-                      const customer = db.users.getById(sub.customerId);
-                      const service = db.services.getById(sub.serviceId);
+                      const customer = subCustomers[sub.customerId];
+                      const svc = subServices[sub.serviceId];
                       return (
                         <div key={sub.id} className="p-4 border rounded-lg bg-white">
                           <div className="flex items-start justify-between">
@@ -531,15 +608,9 @@ export default function LaundromatPortal() {
                                 <Badge variant="secondary" className="capitalize">{sub.frequency}</Badge>
                               </div>
                               <p className="text-sm text-gray-600">{customer?.email}</p>
-                              <p className="text-sm text-gray-600 mt-1">
-                                Service: {service?.name ?? sub.serviceId}
-                              </p>
-                              <p className="text-sm text-gray-600">
-                                Pickup day: {sub.pickupDay}
-                              </p>
-                              <p className="text-sm text-gray-600">
-                                Next pickup: {new Date(sub.nextPickup).toLocaleDateString()}
-                              </p>
+                              <p className="text-sm text-gray-600 mt-1">Service: {svc?.name ?? sub.serviceId}</p>
+                              <p className="text-sm text-gray-600">Pickup day: {sub.pickupDay}</p>
+                              <p className="text-sm text-gray-600">Next pickup: {new Date(sub.nextPickup).toLocaleDateString()}</p>
                             </div>
                             <div className="text-right">
                               <p className="font-bold">${sub.price.toFixed(2)}</p>
@@ -555,11 +626,10 @@ export default function LaundromatPortal() {
             </Card>
           </TabsContent>
 
+          {/* DRIVERS */}
           <TabsContent value="drivers">
             <Card>
-              <CardHeader>
-                <CardTitle>Drivers</CardTitle>
-              </CardHeader>
+              <CardHeader><CardTitle>Drivers</CardTitle></CardHeader>
               <CardContent>
                 {drivers.length === 0 ? (
                   <p className="text-gray-500">No drivers registered yet</p>
@@ -581,6 +651,7 @@ export default function LaundromatPortal() {
           </TabsContent>
         </Tabs>
 
+        {/* NOTIFICATIONS PANEL */}
         {showNotifications && (
           <div className="fixed inset-0 z-50 flex justify-end">
             <div className="absolute inset-0 bg-black/50" onClick={() => setShowNotifications(false)} />
@@ -602,7 +673,7 @@ export default function LaundromatPortal() {
                     <div
                       key={notification.id}
                       className={`p-4 cursor-pointer transition-colors ${notification.isRead ? 'bg-white' : 'bg-blue-50'}`}
-                      onClick={() => markNotificationRead(notification.id)}
+                      onClick={() => handleMarkNotifRead(notification.id)}
                     >
                       <div className="flex items-start gap-3">
                         <div className={`h-2 w-2 rounded-full mt-2 ${notification.isRead ? 'bg-gray-300' : 'bg-blue-500'}`} />
@@ -620,38 +691,25 @@ export default function LaundromatPortal() {
           </div>
         )}
 
+        {/* EDIT SERVICE DIALOG */}
         <Dialog open={!!editingService} onOpenChange={() => setEditingService(null)}>
           <DialogContent>
-            <DialogHeader>
-              <DialogTitle>Edit Service</DialogTitle>
-            </DialogHeader>
+            <DialogHeader><DialogTitle>Edit Service</DialogTitle></DialogHeader>
             {editingService && (
               <form onSubmit={handleUpdateService} className="space-y-4">
                 <div>
                   <Label>Service Name</Label>
-                  <Input 
-                    value={editingService.name}
-                    onChange={(e) => setEditingService({...editingService, name: e.target.value})}
-                  />
+                  <Input value={editingService.name} onChange={(e) => setEditingService({ ...editingService, name: e.target.value })} />
                 </div>
                 <div>
                   <Label>Description</Label>
-                  <Input 
-                    value={editingService.description}
-                    onChange={(e) => setEditingService({...editingService, description: e.target.value})}
-                  />
+                  <Input value={editingService.description} onChange={(e) => setEditingService({ ...editingService, description: e.target.value })} />
                 </div>
                 <div>
                   <Label>Price ($)</Label>
-                  <Input 
-                    type="number"
-                    step="0.01"
-                    value={editingService.price}
-                    onChange={(e) => setEditingService({...editingService, price: parseFloat(e.target.value)})}
-                  />
-                  <p className="text-sm text-gray-500 mt-1">
-                    Recommended: ${editingService.recommendedPrice.toFixed(2)}
-                  </p>
+                  <Input type="number" step="0.01" value={editingService.price}
+                    onChange={(e) => setEditingService({ ...editingService, price: parseFloat(e.target.value) })} />
+                  <p className="text-sm text-gray-500 mt-1">Recommended: ${editingService.recommendedPrice.toFixed(2)}</p>
                 </div>
                 <div className="flex gap-2">
                   <Button type="button" variant="outline" onClick={() => setEditingService(null)} className="flex-1">Cancel</Button>
@@ -662,79 +720,45 @@ export default function LaundromatPortal() {
           </DialogContent>
         </Dialog>
 
+        {/* ADD SERVICE DIALOG */}
         <Dialog open={showAddService} onOpenChange={setShowAddService}>
           <DialogContent className="max-w-lg">
-            <DialogHeader>
-              <DialogTitle>Add New Service</DialogTitle>
-            </DialogHeader>
+            <DialogHeader><DialogTitle>Add New Service</DialogTitle></DialogHeader>
             <form onSubmit={handleAddService} className="space-y-4">
               <div>
                 <Label>Use Recommended Template (Optional)</Label>
-                <Select 
-                  value={newService.useTemplate} 
-                  onValueChange={(v) => {
-                    const template = RECOMMENDED_SERVICES.find(t => t.name === v);
-                    setNewService({
-                      ...newService,
-                      useTemplate: v,
-                      name: template?.name || '',
-                      description: template?.description || '',
-                      price: template?.recommendedPrice.toString() || ''
-                    });
-                  }}
-                >
-                  <SelectTrigger>
-                    <SelectValue placeholder="Select a template or create custom" />
-                  </SelectTrigger>
+                <Select value={newService.useTemplate} onValueChange={(v) => {
+                  const template = RECOMMENDED_SERVICES.find(t => t.name === v);
+                  setNewService({ ...newService, useTemplate: v, name: template?.name ?? '', description: template?.description ?? '', price: template?.recommendedPrice.toString() ?? '' });
+                }}>
+                  <SelectTrigger><SelectValue placeholder="Select a template or create custom" /></SelectTrigger>
                   <SelectContent>
-                    {RECOMMENDED_SERVICES.map(template => (
-                      <SelectItem key={template.name} value={template.name}>
+                    {RECOMMENDED_SERVICES.map(t => (
+                      <SelectItem key={t.name} value={t.name}>
                         <div className="flex items-center gap-2">
                           <Sparkles className="h-4 w-4 text-yellow-500" />
-                          <span>{template.name} - ${template.recommendedPrice}</span>
+                          <span>{t.name} - ${t.recommendedPrice}</span>
                         </div>
                       </SelectItem>
                     ))}
                   </SelectContent>
                 </Select>
-                <p className="text-sm text-gray-500 mt-1">
-                  Choose from our recommended services or create your own
-                </p>
               </div>
-
-              <div className="border-t pt-4">
-                <p className="text-sm font-medium mb-3">Or Create Custom Service</p>
-                
-                <div className="space-y-3">
-                  <div>
-                    <Label>Service Name</Label>
-                    <Input 
-                      value={newService.name}
-                      onChange={(e) => setNewService({...newService, name: e.target.value})}
-                      placeholder="e.g., Express Wash"
-                    />
-                  </div>
-                  <div>
-                    <Label>Description</Label>
-                    <Input 
-                      value={newService.description}
-                      onChange={(e) => setNewService({...newService, description: e.target.value})}
-                      placeholder="Describe the service..."
-                    />
-                  </div>
-                  <div>
-                    <Label>Price ($)</Label>
-                    <Input 
-                      type="number"
-                      step="0.01"
-                      value={newService.price}
-                      onChange={(e) => setNewService({...newService, price: e.target.value})}
-                      placeholder="0.00"
-                    />
-                  </div>
+              <div className="border-t pt-4 space-y-3">
+                <p className="text-sm font-medium">Or Create Custom Service</p>
+                <div>
+                  <Label>Service Name</Label>
+                  <Input value={newService.name} onChange={(e) => setNewService({ ...newService, name: e.target.value })} placeholder="e.g., Express Wash" />
+                </div>
+                <div>
+                  <Label>Description</Label>
+                  <Input value={newService.description} onChange={(e) => setNewService({ ...newService, description: e.target.value })} placeholder="Describe the service…" />
+                </div>
+                <div>
+                  <Label>Price ($)</Label>
+                  <Input type="number" step="0.01" value={newService.price} onChange={(e) => setNewService({ ...newService, price: e.target.value })} placeholder="0.00" />
                 </div>
               </div>
-
               <div className="flex gap-2 pt-2">
                 <Button type="button" variant="outline" onClick={() => setShowAddService(false)} className="flex-1">Cancel</Button>
                 <Button type="submit" className="flex-1">Add Service</Button>
