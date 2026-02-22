@@ -22,7 +22,7 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogTrigger } from '@/components/ui/dialog';
 import {
   Package, Truck, CheckCircle, Clock, MapPin, User as UserIcon, Store,
-  QrCode, DollarSign, Plus, Edit, Trash2, Sparkles, Bell, X, FileText, RefreshCw, Eye, EyeOff,
+  QrCode, DollarSign, Plus, Edit, Trash2, Sparkles, Bell, X, FileText, RefreshCw, Eye, EyeOff, CreditCard,
 } from 'lucide-react';
 
 export default function LaundromatPortal() {
@@ -55,6 +55,7 @@ export default function LaundromatPortal() {
   const [unreadCount, setUnreadCount] = useState(0);
   const [showNotifications, setShowNotifications] = useState(false);
   const [orderCustomers, setOrderCustomers] = useState<Record<string, User | null>>({});
+  const [stripeConnecting, setStripeConnecting] = useState(false);
 
   const loadData = useCallback(async (lId: string, userId: string) => {
     const [lOrders, avail, driverList, svcs, notifs, unread, subs] = await Promise.all([
@@ -161,6 +162,24 @@ export default function LaundromatPortal() {
     }
     localStorage.setItem('laundromat_portal_id', l.id);
     setLaundromat(l);
+  };
+
+  const handleConnectStripe = async () => {
+    if (!laundromat) return;
+    setStripeConnecting(true);
+    try {
+      const res = await fetch(`/api/stripe/connect?laundromatId=${laundromat.id}`);
+      const data = await res.json();
+      if (data.url) {
+        window.location.href = data.url;
+      } else {
+        alert(data.error ?? 'Failed to start Stripe onboarding');
+      }
+    } catch {
+      alert('Failed to connect to Stripe');
+    } finally {
+      setStripeConnecting(false);
+    }
   };
 
   // ── ORDER ACTIONS ─────────────────────────────────────────────────────────
@@ -423,6 +442,25 @@ export default function LaundromatPortal() {
       </header>
 
       <main className="mx-auto max-w-4xl p-4">
+        {/* Stripe Connect banner */}
+        {!laundromat.stripeAccountId && (
+          <div className="mb-4 p-4 bg-amber-50 border border-amber-200 rounded-lg flex items-center justify-between gap-4">
+            <div>
+              <p className="font-medium text-amber-900">Connect Stripe to receive payments</p>
+              <p className="text-sm text-amber-700">Customers cannot pay until you connect your Stripe account.</p>
+            </div>
+            <Button size="sm" onClick={handleConnectStripe} disabled={stripeConnecting} className="shrink-0 bg-amber-600 hover:bg-amber-700 text-white">
+              <CreditCard className="h-4 w-4 mr-1" />
+              {stripeConnecting ? 'Loading…' : 'Connect Stripe'}
+            </Button>
+          </div>
+        )}
+        {laundromat.stripeAccountId && (
+          <div className="mb-4 p-3 bg-green-50 border border-green-200 rounded-lg flex items-center gap-2 text-sm text-green-800">
+            <CheckCircle className="h-4 w-4 text-green-600 shrink-0" />
+            <span>Stripe connected — you will receive payments automatically.</span>
+          </div>
+        )}
         <Tabs value={activeTab} onValueChange={setActiveTab}>
           <TabsList className="grid w-full grid-cols-5">
             <TabsTrigger value="orders">Orders</TabsTrigger>

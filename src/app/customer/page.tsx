@@ -1,13 +1,13 @@
 'use client';
 
 import { useEffect, useState, useCallback } from 'react';
-import { authClient, useSession, getAuthHeaders } from '@/lib/auth/client';
+import { authClient, useSession } from '@/lib/auth/client';
 import {
   findNearestLaundromat, getActiveServicesByLaundromat, createDefaultServices,
   getOrdersByCustomer, getNotificationsByUser, getUnreadNotificationsByUser,
   getSubscriptionsByCustomer, getServiceById,
-  validatePromoCode, applyPromoCode as applyPromoAction,
-  createOrder, createPayment, createSubscription as createSubAction,
+  validatePromoCode,
+  createSubscription as createSubAction,
   cancelSubscription as cancelSubAction,
   updateOrder, updateUser, createOrderStatusNotification,
   markNotificationRead as markNotifRead, markAllNotificationsRead
@@ -26,6 +26,59 @@ import {
   MapPin, Shirt, Clock, CreditCard, Package, CheckCircle, Truck,
   Bell, Tag, Calendar, X, ChevronRight, Home, History, LogOut, Eye, EyeOff,
 } from 'lucide-react';
+import { loadStripe } from '@stripe/stripe-js';
+import { Elements, PaymentElement, useStripe, useElements } from '@stripe/react-stripe-js';
+
+const stripePromise = loadStripe(process.env.NEXT_PUBLIC_STRIPE_PUBLISHABLE_KEY ?? '');
+
+// ── Stripe checkout form component ────────────────────────────────────────────
+function StripeCheckoutForm({
+  total,
+  onSuccess,
+  onBack,
+}: {
+  total: number;
+  onSuccess: (orderId: string) => void;
+  onBack: () => void;
+}) {
+  const stripe = useStripe();
+  const elements = useElements();
+  const [isProcessing, setIsProcessing] = useState(false);
+  const [payError, setPayError] = useState('');
+
+  const handleSubmit = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!stripe || !elements) return;
+    setIsProcessing(true);
+    setPayError('');
+
+    const { error, paymentIntent } = await stripe.confirmPayment({
+      elements,
+      redirect: 'if_required',
+    });
+
+    if (error) {
+      setPayError(error.message ?? 'Payment failed. Please try again.');
+      setIsProcessing(false);
+    } else if (paymentIntent?.status === 'succeeded') {
+      const orderId = (paymentIntent as unknown as { metadata?: { orderId?: string } }).metadata?.orderId ?? '';
+      onSuccess(orderId);
+    }
+  };
+
+  return (
+    <form onSubmit={handleSubmit} className="space-y-4">
+      <PaymentElement />
+      {payError && <p className="text-sm text-red-500">{payError}</p>}
+      <Button type="submit" className="w-full" disabled={!stripe || isProcessing}>
+        {isProcessing ? 'Processing…' : `Pay $${total.toFixed(2)}`}
+      </Button>
+      <Button type="button" variant="ghost" className="w-full" onClick={onBack} disabled={isProcessing}>
+        ← Back
+      </Button>
+    </form>
+  );
+}
 
 type Step = 'address' | 'schedule' | 'payment' | 'tracking';
 
@@ -70,6 +123,8 @@ export default function CustomerApp() {
   const [selectedFrequency, setSelectedFrequency] = useState<'weekly' | 'biweekly' | 'monthly'>('weekly');
   const [selectedPickupDay, setSelectedPickupDay] = useState('Monday');
   const [isProcessing, setIsProcessing] = useState(false);
+  const [stripeClientSecret, setStripeClientSecret] = useState<string | null>(null);
+  const [pendingOrderId, setPendingOrderId] = useState<string | null>(null);
 
   const loadData = useCallback(async (userId: string) => {
     const [userOrders, notifs, unread, subs] = await Promise.all([
@@ -263,55 +318,50 @@ export default function CustomerApp() {
 
   // ── PAYMENT ───────────────────────────────────────────────────────────────
 
-  const handlePayment = async () => {
+  const handleInitiatePayment = async () => {
     if (!session?.user || !nearestLaundromat || !selectedService) return;
     setIsProcessing(true);
     try {
-      const basePrice = selectedService.price;
-      let discount = 0;
-      if (promoApplied && promoCode) {
-        const result = await applyPromoAction(promoCode, basePrice);
-        if (result.success) discount = result.discount;
+      const res = await fetch('/api/stripe/payment-intent', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          laundromatId: nearestLaundromat.id,
+          serviceId: selectedService.id,
+          serviceName: selectedService.name,
+          basePrice: selectedService.price,
+          promoCode: promoApplied ? promoCode : null,
+          customerId: session.user.id,
+          pickupAddress: address,
+          pickupLatitude: lat,
+          pickupLongitude: lon,
+          scheduledPickup: scheduledPickup,
+          notes: orderNotes,
+        }),
+      });
+      const data = await res.json();
+      if (!res.ok) {
+        alert(data.error ?? 'Failed to initiate payment');
+        return;
       }
-      const finalPrice = basePrice - discount;
-      const platformFee = calculatePlatformFee(finalPrice);
-
-      const order = await createOrder({
-        customerId: session.user.id,
-        laundromatId: nearestLaundromat.id,
-        driverId: null,
-        status: 'pending',
-        pickupAddress: address,
-        pickupLatitude: lat,
-        pickupLongitude: lon,
-        deliveryAddress: address,
-        deliveryLatitude: lat,
-        deliveryLongitude: lon,
-        scheduledPickup: new Date(scheduledPickup),
-        serviceId: selectedService.id,
-        serviceName: selectedService.name,
-        notes: orderNotes || null,
-        price: finalPrice,
-        platformFee,
-      });
-
-      await createPayment({
-        orderId: order.id,
-        amount: finalPrice,
-        platformFee,
-        laundromatPayout: finalPrice - platformFee,
-        discountAmount: discount,
-        promoCode: discount > 0 ? promoCode : null,
-        status: 'completed',
-      });
-
-      await createOrderStatusNotification(session.user.id, order.id, 'pending');
-      setCurrentOrder(order);
-      setStep('tracking');
-      await loadData(session.user.id);
+      setStripeClientSecret(data.clientSecret);
+      setPendingOrderId(data.orderId);
+      // Update promo discount from server-calculated value
+      if (data.breakdown?.discount) setPromoDiscount(data.breakdown.discount);
     } finally {
       setIsProcessing(false);
     }
+  };
+
+  const handlePaymentSuccess = async (orderId: string) => {
+    await createOrderStatusNotification(session!.user.id, orderId || pendingOrderId!, 'pending');
+    const allOrders = await getOrdersByCustomer(session!.user.id);
+    const order = allOrders.find(o => o.id === (orderId || pendingOrderId));
+    if (order) setCurrentOrder(order);
+    setStripeClientSecret(null);
+    setPendingOrderId(null);
+    setStep('tracking');
+    await loadData(session!.user.id);
   };
 
   // ── CANCEL ORDER ──────────────────────────────────────────────────────────
@@ -659,10 +709,14 @@ export default function CustomerApp() {
     const basePrice = selectedService?.price ?? 0;
     const finalPrice = Math.max(0, basePrice - promoDiscount);
     const fee = calculatePlatformFee(finalPrice);
+    const total = finalPrice + fee;
+
     return (
       <div className="min-h-screen bg-gradient-to-br from-blue-50 to-indigo-100 p-4">
         <div className="mx-auto max-w-md pt-6">
-          <Button variant="ghost" onClick={() => setStep('schedule')} className="mb-4">← Back</Button>
+          {!stripeClientSecret && (
+            <Button variant="ghost" onClick={() => setStep('schedule')} className="mb-4">← Back</Button>
+          )}
           <Card>
             <CardHeader>
               <CardTitle className="flex items-center gap-2">
@@ -678,51 +732,54 @@ export default function CustomerApp() {
                 {orderNotes && <p className="text-sm text-gray-500 italic">"{orderNotes}"</p>}
               </div>
 
-              <div className="space-y-2">
-                <Label className="flex items-center gap-1 text-sm"><Tag className="h-4 w-4" /> Promo Code</Label>
-                <div className="flex gap-2">
-                  <Input
-                    placeholder="Enter code"
-                    value={promoCode}
-                    onChange={(e) => {
-                      setPromoCode(e.target.value.toUpperCase());
-                      if (promoApplied) { setPromoApplied(false); setPromoDiscount(0); }
-                    }}
-                    disabled={promoApplied}
-                  />
-                  <Button type="button" variant="outline" onClick={handleApplyPromo} disabled={promoApplied || !promoCode.trim()}>
-                    {promoApplied ? 'Applied' : 'Apply'}
+              {!stripeClientSecret && (
+                <>
+                  <div className="space-y-2">
+                    <Label className="flex items-center gap-1 text-sm"><Tag className="h-4 w-4" /> Promo Code</Label>
+                    <div className="flex gap-2">
+                      <Input
+                        placeholder="Enter code"
+                        value={promoCode}
+                        onChange={(e) => {
+                          setPromoCode(e.target.value.toUpperCase());
+                          if (promoApplied) { setPromoApplied(false); setPromoDiscount(0); }
+                        }}
+                        disabled={promoApplied}
+                      />
+                      <Button type="button" variant="outline" onClick={handleApplyPromo} disabled={promoApplied || !promoCode.trim()}>
+                        {promoApplied ? 'Applied' : 'Apply'}
+                      </Button>
+                    </div>
+                    {promoError && <p className="text-sm text-red-500">{promoError}</p>}
+                    {promoApplied && <p className="text-sm text-green-600">Promo applied — saving ${promoDiscount.toFixed(2)}!</p>}
+                  </div>
+
+                  <div className="space-y-2 border-t pt-3">
+                    <div className="flex justify-between text-sm"><span>Service</span><span>${basePrice.toFixed(2)}</span></div>
+                    {promoDiscount > 0 && (
+                      <div className="flex justify-between text-sm text-green-600">
+                        <span>Discount ({promoCode})</span><span>-${promoDiscount.toFixed(2)}</span>
+                      </div>
+                    )}
+                    <div className="flex justify-between text-sm text-gray-500"><span>Platform fee (15%)</span><span>${fee.toFixed(2)}</span></div>
+                    <div className="flex justify-between font-bold border-t pt-2"><span>Total</span><span>${total.toFixed(2)}</span></div>
+                  </div>
+
+                  <Button onClick={handleInitiatePayment} className="w-full" disabled={isProcessing}>
+                    {isProcessing ? 'Preparing payment…' : `Proceed to Payment — $${total.toFixed(2)}`}
                   </Button>
-                </div>
-                {promoError && <p className="text-sm text-red-500">{promoError}</p>}
-                {promoApplied && <p className="text-sm text-green-600">Promo applied — saving ${promoDiscount.toFixed(2)}!</p>}
-              </div>
+                </>
+              )}
 
-              <div className="space-y-2 border-t pt-3">
-                <div className="flex justify-between text-sm"><span>Service</span><span>${basePrice.toFixed(2)}</span></div>
-                {promoDiscount > 0 && (
-                  <div className="flex justify-between text-sm text-green-600">
-                    <span>Discount ({promoCode})</span><span>-${promoDiscount.toFixed(2)}</span>
-                  </div>
-                )}
-                <div className="flex justify-between text-sm text-gray-500"><span>Platform fee (15%)</span><span>${fee.toFixed(2)}</span></div>
-                <div className="flex justify-between font-bold border-t pt-2"><span>Total</span><span>${(finalPrice + fee).toFixed(2)}</span></div>
-              </div>
-
-              <div className="p-4 bg-gray-50 rounded-lg border border-dashed">
-                <p className="text-xs text-gray-400 uppercase tracking-wide mb-3">Payment details (demo)</p>
-                <div className="space-y-2">
-                  <Input placeholder="Card Number" defaultValue="4242 4242 4242 4242" />
-                  <div className="flex gap-2">
-                    <Input placeholder="MM/YY" defaultValue="12/27" className="flex-1" />
-                    <Input placeholder="CVC" defaultValue="123" className="w-20" />
-                  </div>
-                </div>
-              </div>
-
-              <Button onClick={handlePayment} className="w-full" disabled={isProcessing}>
-                {isProcessing ? 'Processing…' : `Pay $${(finalPrice + fee).toFixed(2)}`}
-              </Button>
+              {stripeClientSecret && (
+                <Elements stripe={stripePromise} options={{ clientSecret: stripeClientSecret, appearance: { theme: 'stripe' } }}>
+                  <StripeCheckoutForm
+                    total={total}
+                    onSuccess={handlePaymentSuccess}
+                    onBack={() => { setStripeClientSecret(null); setPendingOrderId(null); }}
+                  />
+                </Elements>
+              )}
             </CardContent>
           </Card>
         </div>

@@ -71,6 +71,7 @@ export const laundromats = pgTable("laundromats", {
   qrCode: text("qr_code").notNull(),
   phone: text("phone").default("").notNull(),
   email: text("email").default("").notNull(),
+  stripeAccountId: text("stripe_account_id"),
   isActive: boolean("is_active").default(true).notNull(),
   createdAt: timestamp("created_at").defaultNow().notNull(),
 })
@@ -116,6 +117,7 @@ export const payments = pgTable("payments", {
   laundromatPayout: real("laundromat_payout").notNull(),
   discountAmount: real("discount_amount").default(0).notNull(),
   promoCode: text("promo_code"),
+  stripePaymentIntentId: text("stripe_payment_intent_id"),
   status: text("status").default("pending").notNull(), // pending | completed | failed
   createdAt: timestamp("created_at").defaultNow().notNull(),
 })
