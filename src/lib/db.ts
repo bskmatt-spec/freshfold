@@ -1,4 +1,4 @@
-import { User, Laundromat, Order, Payment, OrderWithDetails, Service, RECOMMENDED_SERVICES, calculateDistance } from './types';
+import { User, Laundromat, Order, Payment, OrderWithDetails, Service, PromoCode, Subscription, Notification, RECOMMENDED_SERVICES, calculateDistance, calculateDiscount } from './types';
 
 const DB_KEY = 'laundry_app_db';
 
@@ -8,6 +8,9 @@ interface Database {
   services: Service[];
   orders: Order[];
   payments: Payment[];
+  promoCodes: PromoCode[];
+  subscriptions: Subscription[];
+  notifications: Notification[];
 }
 
 const defaultDb: Database = {
@@ -15,7 +18,10 @@ const defaultDb: Database = {
   laundromats: [],
   services: [],
   orders: [],
-  payments: []
+  payments: [],
+  promoCodes: [],
+  subscriptions: [],
+  notifications: []
 };
 
 function getDb(): Database {
@@ -205,6 +211,125 @@ export const db = {
       db.payments[index] = { ...db.payments[index], ...updates };
       saveDb(db);
       return db.payments[index];
+    }
+  },
+
+  promoCodes: {
+    getAll: (): PromoCode[] => getDb().promoCodes,
+    getById: (id: string): PromoCode | undefined => getDb().promoCodes.find(p => p.id === id),
+    getByCode: (code: string): PromoCode | undefined => getDb().promoCodes.find(p => p.code.toUpperCase() === code.toUpperCase() && p.isActive),
+    create: (promoCode: Omit<PromoCode, 'id' | 'createdAt' | 'usageCount'>): PromoCode => {
+      const db = getDb();
+      const newPromoCode: PromoCode = { ...promoCode, id: generateId(), usageCount: 0, createdAt: new Date().toISOString() };
+      db.promoCodes.push(newPromoCode);
+      saveDb(db);
+      return newPromoCode;
+    },
+    update: (id: string, updates: Partial<PromoCode>): PromoCode | undefined => {
+      const db = getDb();
+      const index = db.promoCodes.findIndex(p => p.id === id);
+      if (index === -1) return undefined;
+      db.promoCodes[index] = { ...db.promoCodes[index], ...updates };
+      saveDb(db);
+      return db.promoCodes[index];
+    },
+    validate: (code: string): { valid: boolean; promoCode?: PromoCode; message?: string } => {
+      const promoCode = db.promoCodes.getByCode(code);
+      if (!promoCode) return { valid: false, message: 'Invalid promo code' };
+      
+      const now = new Date();
+      if (new Date(promoCode.validFrom) > now) return { valid: false, message: 'Promo code not yet active' };
+      if (new Date(promoCode.validUntil) < now) return { valid: false, message: 'Promo code expired' };
+      if (promoCode.usageCount >= promoCode.usageLimit) return { valid: false, message: 'Promo code usage limit reached' };
+      
+      return { valid: true, promoCode };
+    },
+    apply: (code: string, amount: number): { success: boolean; discount: number; finalAmount: number; message?: string } => {
+      const validation = db.promoCodes.validate(code);
+      if (!validation.valid) return { success: false, discount: 0, finalAmount: amount, message: validation.message };
+      
+      const promoCode = validation.promoCode!;
+      const discount = calculateDiscount(amount, promoCode.discountPercent, promoCode.maxDiscount);
+      
+      db.promoCodes.update(promoCode.id, { usageCount: promoCode.usageCount + 1 });
+      
+      return { success: true, discount, finalAmount: amount - discount };
+    }
+  },
+
+  subscriptions: {
+    getAll: (): Subscription[] => getDb().subscriptions,
+    getById: (id: string): Subscription | undefined => getDb().subscriptions.find(s => s.id === id),
+    getByCustomer: (customerId: string): Subscription[] => getDb().subscriptions.filter(s => s.customerId === customerId && s.isActive),
+    getByLaundromat: (laundromatId: string): Subscription[] => getDb().subscriptions.filter(s => s.laundromatId === laundromatId && s.isActive),
+    create: (subscription: Omit<Subscription, 'id' | 'createdAt'>): Subscription => {
+      const db = getDb();
+      const newSubscription: Subscription = { ...subscription, id: generateId(), createdAt: new Date().toISOString() };
+      db.subscriptions.push(newSubscription);
+      saveDb(db);
+      return newSubscription;
+    },
+    update: (id: string, updates: Partial<Subscription>): Subscription | undefined => {
+      const db = getDb();
+      const index = db.subscriptions.findIndex(s => s.id === id);
+      if (index === -1) return undefined;
+      db.subscriptions[index] = { ...db.subscriptions[index], ...updates };
+      saveDb(db);
+      return db.subscriptions[index];
+    },
+    cancel: (id: string): boolean => {
+      const db = getDb();
+      const index = db.subscriptions.findIndex(s => s.id === id);
+      if (index === -1) return false;
+      db.subscriptions[index].isActive = false;
+      saveDb(db);
+      return true;
+    }
+  },
+
+  notifications: {
+    getAll: (): Notification[] => getDb().notifications,
+    getByUser: (userId: string): Notification[] => getDb().notifications.filter(n => n.userId === userId).sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime()),
+    getUnreadByUser: (userId: string): Notification[] => getDb().notifications.filter(n => n.userId === userId && !n.isRead).sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime()),
+    create: (notification: Omit<Notification, 'id' | 'createdAt'>): Notification => {
+      const db = getDb();
+      const newNotification: Notification = { ...notification, id: generateId(), createdAt: new Date().toISOString() };
+      db.notifications.push(newNotification);
+      saveDb(db);
+      return newNotification;
+    },
+    markAsRead: (id: string): Notification | undefined => {
+      const db = getDb();
+      const index = db.notifications.findIndex(n => n.id === id);
+      if (index === -1) return undefined;
+      db.notifications[index].isRead = true;
+      saveDb(db);
+      return db.notifications[index];
+    },
+    markAllAsRead: (userId: string): void => {
+      const db = getDb();
+      db.notifications.forEach(n => {
+        if (n.userId === userId) n.isRead = true;
+      });
+      saveDb(db);
+    },
+    createOrderStatusNotification: (userId: string, orderId: string, status: string) => {
+      const statusMessages: Record<string, string> = {
+        pending: 'Your order has been received and is pending pickup',
+        picked_up: 'Your laundry has been picked up',
+        in_progress: 'Your laundry is being processed',
+        delivered: 'Your laundry has been delivered!',
+        cancelled: 'Your order has been cancelled'
+      };
+      
+      db.notifications.create({
+        userId,
+        orderId,
+        type: 'order_status',
+        title: 'Order Update',
+        message: statusMessages[status] || 'Your order status has been updated',
+        isRead: false
+      });
     }
   },
 

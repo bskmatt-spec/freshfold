@@ -2,7 +2,7 @@
 
 import { useEffect, useState } from 'react';
 import { db } from '@/lib/db';
-import { User, Laundromat, Order, Payment, Service, PLATFORM_FEE_PERCENT } from '@/lib/types';
+import { User, Laundromat, Order, Payment, Service, PromoCode, Subscription, PLATFORM_FEE_PERCENT } from '@/lib/types';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
@@ -11,7 +11,7 @@ import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
 import { Badge } from '@/components/ui/badge';
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table';
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogTrigger } from '@/components/ui/dialog';
-import { Shield, Store, DollarSign, Package, Users, TrendingUp, MapPin, QrCode, Sparkles } from 'lucide-react';
+import { Shield, Store, DollarSign, Package, Users, TrendingUp, MapPin, QrCode, Sparkles, Tag, Calendar, Plus } from 'lucide-react';
 
 export default function AdminDashboard() {
   const [isAuthenticated, setIsAuthenticated] = useState(false);
@@ -20,6 +20,8 @@ export default function AdminDashboard() {
   const [orders, setOrders] = useState<Order[]>([]);
   const [payments, setPayments] = useState<Payment[]>([]);
   const [services, setServices] = useState<Service[]>([]);
+  const [promoCodes, setPromoCodes] = useState<PromoCode[]>([]);
+  const [subscriptions, setSubscriptions] = useState<Subscription[]>([]);
   const [activeTab, setActiveTab] = useState('overview');
   const [selectedLaundromat, setSelectedLaundromat] = useState<string>('');
   const [newLaundromat, setNewLaundromat] = useState({
@@ -32,6 +34,15 @@ export default function AdminDashboard() {
     email: ''
   });
   const [selectedQR, setSelectedQR] = useState<Laundromat | null>(null);
+  const [showAddPromo, setShowAddPromo] = useState(false);
+  const [newPromo, setNewPromo] = useState({
+    code: '',
+    discountPercent: '10',
+    maxDiscount: '20',
+    validFrom: '',
+    validUntil: '',
+    usageLimit: '100'
+  });
 
   useEffect(() => {
     db.init();
@@ -45,6 +56,8 @@ export default function AdminDashboard() {
     setOrders(db.orders.getAll());
     setPayments(db.payments.getAll());
     setServices(db.services.getAll());
+    setPromoCodes(db.promoCodes.getAll());
+    setSubscriptions(db.subscriptions.getAll());
   };
 
   const handleLogin = (e: React.FormEvent) => {
@@ -93,6 +106,38 @@ export default function AdminDashboard() {
   const totalPlatformFees = payments.filter(p => p.status === 'completed').reduce((sum, p) => sum + p.platformFee, 0);
   const totalOrders = orders.length;
   const completedOrders = orders.filter(o => o.status === 'delivered').length;
+  const totalDiscounts = payments.filter(p => p.status === 'completed').reduce((sum, p) => sum + (p.discountAmount || 0), 0);
+
+  const handleAddPromo = (e: React.FormEvent) => {
+    e.preventDefault();
+    db.promoCodes.create({
+      code: newPromo.code.toUpperCase(),
+      discountPercent: parseInt(newPromo.discountPercent),
+      maxDiscount: parseFloat(newPromo.maxDiscount),
+      validFrom: newPromo.validFrom,
+      validUntil: newPromo.validUntil,
+      usageLimit: parseInt(newPromo.usageLimit),
+      isActive: true
+    });
+    setNewPromo({
+      code: '',
+      discountPercent: '10',
+      maxDiscount: '20',
+      validFrom: '',
+      validUntil: '',
+      usageLimit: '100'
+    });
+    setShowAddPromo(false);
+    loadData();
+  };
+
+  const togglePromoStatus = (id: string) => {
+    const promo = promoCodes.find(p => p.id === id);
+    if (promo) {
+      db.promoCodes.update(id, { isActive: !promo.isActive });
+      loadData();
+    }
+  };
 
   if (!isAuthenticated) {
     return (
@@ -147,11 +192,12 @@ export default function AdminDashboard() {
 
       <main className="mx-auto max-w-6xl p-4">
         <Tabs value={activeTab} onValueChange={setActiveTab}>
-          <TabsList className="grid w-full grid-cols-5">
+          <TabsList className="grid w-full grid-cols-6">
             <TabsTrigger value="overview">Overview</TabsTrigger>
             <TabsTrigger value="laundromats">Laundromats</TabsTrigger>
             <TabsTrigger value="orders">Orders</TabsTrigger>
             <TabsTrigger value="services">Services</TabsTrigger>
+            <TabsTrigger value="promos">Promos</TabsTrigger>
             <TabsTrigger value="revenue">Revenue</TabsTrigger>
           </TabsList>
 
@@ -472,19 +518,89 @@ export default function AdminDashboard() {
             </Card>
           </TabsContent>
 
+          <TabsContent value="promos">
+            <Card>
+              <CardHeader className="flex flex-row items-center justify-between">
+                <CardTitle>Promo Codes</CardTitle>
+                <Button size="sm" onClick={() => setShowAddPromo(true)}>
+                  <Plus className="h-4 w-4 mr-1" /> Add Promo
+                </Button>
+              </CardHeader>
+              <CardContent>
+                <Table>
+                  <TableHeader>
+                    <TableRow>
+                      <TableHead>Code</TableHead>
+                      <TableHead>Discount</TableHead>
+                      <TableHead>Max Discount</TableHead>
+                      <TableHead>Usage</TableHead>
+                      <TableHead>Valid Until</TableHead>
+                      <TableHead>Status</TableHead>
+                      <TableHead>Actions</TableHead>
+                    </TableRow>
+                  </TableHeader>
+                  <TableBody>
+                    {promoCodes.map(promo => (
+                      <TableRow key={promo.id}>
+                        <TableCell className="font-mono font-bold">{promo.code}</TableCell>
+                        <TableCell>{promo.discountPercent}%</TableCell>
+                        <TableCell>${promo.maxDiscount.toFixed(2)}</TableCell>
+                        <TableCell>{promo.usageCount} / {promo.usageLimit}</TableCell>
+                        <TableCell>{new Date(promo.validUntil).toLocaleDateString()}</TableCell>
+                        <TableCell>
+                          <Badge variant={promo.isActive ? 'default' : 'secondary'}>
+                            {promo.isActive ? 'Active' : 'Inactive'}
+                          </Badge>
+                        </TableCell>
+                        <TableCell>
+                          <Button 
+                            variant="outline" 
+                            size="sm"
+                            onClick={() => togglePromoStatus(promo.id)}
+                          >
+                            {promo.isActive ? 'Deactivate' : 'Activate'}
+                          </Button>
+                        </TableCell>
+                      </TableRow>
+                    ))}
+                  </TableBody>
+                </Table>
+              </CardContent>
+            </Card>
+          </TabsContent>
+
           <TabsContent value="revenue">
             <Card>
               <CardHeader>
                 <CardTitle>Revenue Breakdown</CardTitle>
               </CardHeader>
               <CardContent>
+                <div className="grid grid-cols-1 md:grid-cols-4 gap-4 mb-6">
+                  <div className="p-4 bg-blue-50 rounded-lg">
+                    <p className="text-sm text-gray-600">Total Revenue</p>
+                    <p className="text-2xl font-bold">${totalRevenue.toFixed(2)}</p>
+                  </div>
+                  <div className="p-4 bg-orange-50 rounded-lg">
+                    <p className="text-sm text-gray-600">Platform Fees (15%)</p>
+                    <p className="text-2xl font-bold">${totalPlatformFees.toFixed(2)}</p>
+                  </div>
+                  <div className="p-4 bg-green-50 rounded-lg">
+                    <p className="text-sm text-gray-600">Laundromat Payouts</p>
+                    <p className="text-2xl font-bold">${(totalRevenue - totalPlatformFees).toFixed(2)}</p>
+                  </div>
+                  <div className="p-4 bg-purple-50 rounded-lg">
+                    <p className="text-sm text-gray-600">Total Discounts</p>
+                    <p className="text-2xl font-bold">${totalDiscounts.toFixed(2)}</p>
+                  </div>
+                </div>
                 <Table>
                   <TableHeader>
                     <TableRow>
                       <TableHead>Payment ID</TableHead>
                       <TableHead>Order ID</TableHead>
                       <TableHead>Amount</TableHead>
-                      <TableHead>Platform Fee (15%)</TableHead>
+                      <TableHead>Discount</TableHead>
+                      <TableHead>Platform Fee</TableHead>
                       <TableHead>Laundromat Payout</TableHead>
                       <TableHead>Status</TableHead>
                     </TableRow>
@@ -495,6 +611,9 @@ export default function AdminDashboard() {
                         <TableCell>#{payment.id.slice(0, 8)}</TableCell>
                         <TableCell>#{payment.orderId.slice(0, 8)}</TableCell>
                         <TableCell>${payment.amount.toFixed(2)}</TableCell>
+                        <TableCell className={payment.discountAmount > 0 ? 'text-green-600' : ''}>
+                          {payment.discountAmount > 0 ? `-$${payment.discountAmount.toFixed(2)}` : '-'}
+                        </TableCell>
                         <TableCell>${payment.platformFee.toFixed(2)}</TableCell>
                         <TableCell>${payment.laundromatPayout.toFixed(2)}</TableCell>
                         <TableCell>
@@ -522,6 +641,78 @@ export default function AdminDashboard() {
               </div>
               <p className="text-sm text-gray-600">ID: {selectedQR?.id}</p>
             </div>
+          </DialogContent>
+        </Dialog>
+
+        <Dialog open={showAddPromo} onOpenChange={setShowAddPromo}>
+          <DialogContent>
+            <DialogHeader>
+              <DialogTitle>Create Promo Code</DialogTitle>
+            </DialogHeader>
+            <form onSubmit={handleAddPromo} className="space-y-4">
+              <div>
+                <Label>Promo Code</Label>
+                <Input 
+                  value={newPromo.code}
+                  onChange={(e) => setNewPromo({...newPromo, code: e.target.value.toUpperCase()})}
+                  placeholder="e.g., SAVE20"
+                  required
+                />
+              </div>
+              <div className="grid grid-cols-2 gap-4">
+                <div>
+                  <Label>Discount %</Label>
+                  <Input 
+                    type="number"
+                    value={newPromo.discountPercent}
+                    onChange={(e) => setNewPromo({...newPromo, discountPercent: e.target.value})}
+                    required
+                  />
+                </div>
+                <div>
+                  <Label>Max Discount ($)</Label>
+                  <Input 
+                    type="number"
+                    value={newPromo.maxDiscount}
+                    onChange={(e) => setNewPromo({...newPromo, maxDiscount: e.target.value})}
+                    required
+                  />
+                </div>
+              </div>
+              <div className="grid grid-cols-2 gap-4">
+                <div>
+                  <Label>Valid From</Label>
+                  <Input 
+                    type="date"
+                    value={newPromo.validFrom}
+                    onChange={(e) => setNewPromo({...newPromo, validFrom: e.target.value})}
+                    required
+                  />
+                </div>
+                <div>
+                  <Label>Valid Until</Label>
+                  <Input 
+                    type="date"
+                    value={newPromo.validUntil}
+                    onChange={(e) => setNewPromo({...newPromo, validUntil: e.target.value})}
+                    required
+                  />
+                </div>
+              </div>
+              <div>
+                <Label>Usage Limit</Label>
+                <Input 
+                  type="number"
+                  value={newPromo.usageLimit}
+                  onChange={(e) => setNewPromo({...newPromo, usageLimit: e.target.value})}
+                  required
+                />
+              </div>
+              <div className="flex gap-2">
+                <Button type="button" variant="outline" onClick={() => setShowAddPromo(false)} className="flex-1">Cancel</Button>
+                <Button type="submit" className="flex-1">Create Promo</Button>
+              </div>
+            </form>
           </DialogContent>
         </Dialog>
       </main>

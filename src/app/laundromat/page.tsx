@@ -2,7 +2,7 @@
 
 import { useEffect, useState } from 'react';
 import { db } from '@/lib/db';
-import { User, Order, OrderWithDetails, Laundromat, Service, RECOMMENDED_SERVICES } from '@/lib/types';
+import { User, Order, OrderWithDetails, Laundromat, Service, Notification, RECOMMENDED_SERVICES } from '@/lib/types';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
@@ -11,7 +11,7 @@ import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
 import { Badge } from '@/components/ui/badge';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogTrigger } from '@/components/ui/dialog';
-import { Package, Truck, CheckCircle, Clock, MapPin, User as UserIcon, Store, QrCode, DollarSign, Plus, Edit, Trash2, Sparkles } from 'lucide-react';
+import { Package, Truck, CheckCircle, Clock, MapPin, User as UserIcon, Store, QrCode, DollarSign, Plus, Edit, Trash2, Sparkles, Bell, X, FileText } from 'lucide-react';
 
 export default function LaundromatPortal() {
   const [user, setUser] = useState<User | null>(null);
@@ -31,6 +31,9 @@ export default function LaundromatPortal() {
     price: '',
     useTemplate: ''
   });
+  const [notifications, setNotifications] = useState<Notification[]>([]);
+  const [unreadCount, setUnreadCount] = useState(0);
+  const [showNotifications, setShowNotifications] = useState(false);
 
   useEffect(() => {
     db.init();
@@ -49,21 +52,26 @@ export default function LaundromatPortal() {
   const loadData = (laundromatId: string) => {
     const laundromatOrders = db.orders.getByLaundromat(laundromatId).map(o => db.orders.withDetails(o));
     setOrders(laundromatOrders);
-    
+
     const available = db.orders.getAvailableForDriver()
       .filter(o => o.laundromatId === laundromatId)
       .map(o => db.orders.withDetails(o));
     setAvailableOrders(available);
-    
+
     const allUsers = db.users.getAll();
     setDrivers(allUsers.filter(u => u.role === 'driver' && u.laundromatId === laundromatId));
-    
+
     const laundromatServices = db.services.getByLaundromat(laundromatId);
     if (laundromatServices.length === 0) {
       const defaults = db.services.createDefaultsForLaundromat(laundromatId);
       setServices(defaults);
     } else {
       setServices(laundromatServices);
+    }
+
+    if (user) {
+      setNotifications(db.notifications.getByUser(user.id));
+      setUnreadCount(db.notifications.getUnreadByUser(user.id).length);
     }
   };
 
@@ -95,8 +103,12 @@ export default function LaundromatPortal() {
   };
 
   const updateOrderStatus = (orderId: string, status: Order['status']) => {
-    db.orders.update(orderId, { status });
-    if (laundromat) loadData(laundromat.id);
+    const order = db.orders.getById(orderId);
+    if (order) {
+      db.orders.update(orderId, { status });
+      db.notifications.createOrderStatusNotification(order.customerId, orderId, status);
+      if (laundromat) loadData(laundromat.id);
+    }
   };
 
   const assignDriver = (orderId: string, driverId: string) => {
@@ -174,9 +186,17 @@ export default function LaundromatPortal() {
       pending: 'Pending',
       picked_up: 'Picked Up',
       in_progress: 'In Progress',
-      delivered: 'Delivered'
+      delivered: 'Delivered',
+      cancelled: 'Cancelled'
     };
     return labels[status] || status;
+  };
+
+  const markNotificationRead = (notificationId: string) => {
+    db.notifications.markAsRead(notificationId);
+    if (user && laundromat) {
+      loadData(laundromat.id);
+    }
   };
 
   if (!user || !laundromat) {
@@ -236,6 +256,14 @@ export default function LaundromatPortal() {
             </div>
           </div>
           <div className="flex gap-2">
+            <Button variant="ghost" size="sm" onClick={() => setShowNotifications(true)} className="relative">
+              <Bell className="h-5 w-5" />
+              {unreadCount > 0 && (
+                <span className="absolute -top-1 -right-1 h-5 w-5 bg-red-500 text-white text-xs rounded-full flex items-center justify-center">
+                  {unreadCount}
+                </span>
+              )}
+            </Button>
             <Dialog open={showQR} onOpenChange={setShowQR}>
               <DialogTrigger asChild>
                 <Button variant="outline" size="sm">
@@ -321,21 +349,32 @@ export default function LaundromatPortal() {
                         <Clock className="h-4 w-4 text-gray-400" />
                         <span>{new Date(order.scheduledPickup).toLocaleString()}</span>
                       </div>
+                      {order.notes && (
+                        <div className="flex items-start gap-2 p-2 bg-yellow-50 rounded">
+                          <FileText className="h-4 w-4 text-yellow-600 mt-0.5" />
+                          <span className="text-sm text-yellow-800">{order.notes}</span>
+                        </div>
+                      )}
                     </div>
 
-                    {order.status !== 'delivered' && order.status !== 'cancelled' && (
+                     {order.status !== 'delivered' && order.status !== 'cancelled' && (
                       <div className="mt-4 flex gap-2">
                         {order.status === 'pending' && (
-                          <Select onValueChange={(v) => assignDriver(order.id, v)}>
-                            <SelectTrigger className="flex-1">
-                              <SelectValue placeholder="Assign Driver" />
-                            </SelectTrigger>
-                            <SelectContent>
-                              {drivers.map(driver => (
-                                <SelectItem key={driver.id} value={driver.id}>{driver.name}</SelectItem>
-                              ))}
-                            </SelectContent>
-                          </Select>
+                          <>
+                            <Select onValueChange={(v) => assignDriver(order.id, v)}>
+                              <SelectTrigger className="flex-1">
+                                <SelectValue placeholder="Assign Driver" />
+                              </SelectTrigger>
+                              <SelectContent>
+                                {drivers.map(driver => (
+                                  <SelectItem key={driver.id} value={driver.id}>{driver.name}</SelectItem>
+                                ))}
+                              </SelectContent>
+                            </Select>
+                            <Button variant="destructive" onClick={() => updateOrderStatus(order.id, 'cancelled')}>
+                              Cancel
+                            </Button>
+                          </>
                         )}
                         {order.status === 'picked_up' && (
                           <Button onClick={() => updateOrderStatus(order.id, 'in_progress')} className="flex-1">
@@ -487,6 +526,45 @@ export default function LaundromatPortal() {
             </Card>
           </TabsContent>
         </Tabs>
+
+        {showNotifications && (
+          <div className="fixed inset-0 z-50 flex justify-end">
+            <div className="absolute inset-0 bg-black/50" onClick={() => setShowNotifications(false)} />
+            <div className="relative w-full max-w-sm bg-white h-full shadow-xl overflow-y-auto">
+              <div className="sticky top-0 bg-white border-b px-4 py-3 flex items-center justify-between">
+                <h2 className="font-semibold">Notifications</h2>
+                <Button variant="ghost" size="sm" onClick={() => setShowNotifications(false)}>
+                  <X className="h-5 w-5" />
+                </Button>
+              </div>
+              <div className="divide-y">
+                {notifications.length === 0 ? (
+                  <div className="p-8 text-center text-gray-500">
+                    <Bell className="h-12 w-12 mx-auto mb-3 opacity-50" />
+                    <p>No notifications yet</p>
+                  </div>
+                ) : (
+                  notifications.map(notification => (
+                    <div
+                      key={notification.id}
+                      className={`p-4 cursor-pointer transition-colors ${notification.isRead ? 'bg-white' : 'bg-blue-50'}`}
+                      onClick={() => markNotificationRead(notification.id)}
+                    >
+                      <div className="flex items-start gap-3">
+                        <div className={`h-2 w-2 rounded-full mt-2 ${notification.isRead ? 'bg-gray-300' : 'bg-blue-500'}`} />
+                        <div className="flex-1">
+                          <p className="font-medium text-sm">{notification.title}</p>
+                          <p className="text-sm text-gray-600">{notification.message}</p>
+                          <p className="text-xs text-gray-400 mt-1">{new Date(notification.createdAt).toLocaleString()}</p>
+                        </div>
+                      </div>
+                    </div>
+                  ))
+                )}
+              </div>
+            </div>
+          </div>
+        )}
 
         <Dialog open={!!editingService} onOpenChange={() => setEditingService(null)}>
           <DialogContent>

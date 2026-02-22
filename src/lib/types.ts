@@ -65,7 +65,46 @@ export interface Payment {
   amount: number;
   platformFee: number;
   laundromatPayout: number;
+  discountAmount: number;
+  promoCode?: string;
   status: 'pending' | 'completed' | 'failed';
+  createdAt: string;
+}
+
+export interface PromoCode {
+  id: string;
+  code: string;
+  discountPercent: number;
+  maxDiscount: number;
+  validFrom: string;
+  validUntil: string;
+  usageLimit: number;
+  usageCount: number;
+  isActive: boolean;
+  createdAt: string;
+}
+
+export interface Subscription {
+  id: string;
+  customerId: string;
+  laundromatId: string;
+  serviceId: string;
+  frequency: 'weekly' | 'biweekly' | 'monthly';
+  pickupDay: string;
+  price: number;
+  isActive: boolean;
+  nextPickup: string;
+  createdAt: string;
+}
+
+export interface Notification {
+  id: string;
+  userId: string;
+  orderId?: string;
+  type: 'order_status' | 'promo' | 'subscription' | 'system';
+  title: string;
+  message: string;
+  isRead: boolean;
   createdAt: string;
 }
 
@@ -107,6 +146,11 @@ export const RECOMMENDED_SERVICES = [
 
 export function calculatePlatformFee(amount: number): number {
   return Math.round(amount * (PLATFORM_FEE_PERCENT / 100) * 100) / 100;
+}
+
+export function calculateDiscount(amount: number, discountPercent: number, maxDiscount: number): number {
+  const discount = Math.round(amount * (discountPercent / 100) * 100) / 100;
+  return Math.min(discount, maxDiscount);
 }
 
 export function calculateDistance(lat1: number, lon1: number, lat2: number, lon2: number): number {
