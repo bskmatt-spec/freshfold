@@ -157,6 +157,16 @@ export const notifications = pgTable("notifications", {
   createdAt: timestamp("created_at").defaultNow().notNull(),
 })
 
+export const phoneVerifications = pgTable("phone_verifications", {
+  id: text("id").primaryKey(),
+  userId: text("user_id").notNull().references(() => user.id, { onDelete: "cascade" }),
+  phone: text("phone").notNull(),
+  code: text("code").notNull(),
+  expiresAt: timestamp("expires_at").notNull(),
+  verified: boolean("verified").default(false).notNull(),
+  createdAt: timestamp("created_at").defaultNow().notNull(),
+})
+
 // ─── Inferred types ───────────────────────────────────────────────────────────
 
 export type User = typeof user.$inferSelect
@@ -167,3 +177,4 @@ export type Payment = typeof payments.$inferSelect
 export type PromoCode = typeof promoCodes.$inferSelect
 export type Subscription = typeof subscriptions.$inferSelect
 export type Notification = typeof notifications.$inferSelect
+export type PhoneVerification = typeof phoneVerifications.$inferSelect

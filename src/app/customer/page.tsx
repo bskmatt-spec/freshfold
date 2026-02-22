@@ -38,6 +38,11 @@ export default function CustomerApp() {
   const [authError, setAuthError] = useState('');
   const [authLoading, setAuthLoading] = useState(false);
   const [showPassword, setShowPassword] = useState(false);
+  // Phone verification
+  const [verifyStep, setVerifyStep] = useState<{ userId: string; phone: string; devCode?: string } | null>(null);
+  const [verifyCode, setVerifyCode] = useState('');
+  const [verifyError, setVerifyError] = useState('');
+  const [verifyLoading, setVerifyLoading] = useState(false);
 
   // App state
   const [step, setStep] = useState<Step>('address');
@@ -117,6 +122,13 @@ export default function CustomerApp() {
     e.preventDefault();
     setAuthLoading(true);
     setAuthError('');
+
+    if (!authForm.phone.trim()) {
+      setAuthError('Phone number is required for verification.');
+      setAuthLoading(false);
+      return;
+    }
+
     const { data, error } = await authClient.signUp.email({
       name: authForm.name,
       email: authForm.email,
@@ -127,12 +139,71 @@ export default function CustomerApp() {
       setAuthLoading(false);
       return;
     }
-    // Save phone number to user record after signup
-    if (data?.user?.id && authForm.phone) {
-      await updateUser(data.user.id, { phone: authForm.phone });
+
+    const userId = data?.user?.id;
+    if (!userId) {
+      setAuthError('Sign up failed — please try again.');
+      setAuthLoading(false);
+      return;
     }
-    await refetchSession();
+
+    // Send phone verification code
+    const res = await fetch('/api/verify/send', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ userId, phone: authForm.phone }),
+    });
+    const result = await res.json();
+
+    if (!res.ok) {
+      setAuthError(result.error ?? 'Failed to send verification code.');
+      setAuthLoading(false);
+      return;
+    }
+
+    setVerifyStep({ userId, phone: authForm.phone, devCode: result.devCode });
     setAuthLoading(false);
+  };
+
+  const handleVerifyCode = async (e: React.FormEvent) => {
+    e.preventDefault();
+    setVerifyLoading(true);
+    setVerifyError('');
+
+    const res = await fetch('/api/verify/confirm', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ userId: verifyStep?.userId, code: verifyCode }),
+    });
+    const result = await res.json();
+
+    if (!res.ok) {
+      setVerifyError(result.error ?? 'Invalid code.');
+      setVerifyLoading(false);
+      return;
+    }
+
+    setVerifyStep(null);
+    setVerifyCode('');
+    await refetchSession();
+    setVerifyLoading(false);
+  };
+
+  const handleResendCode = async () => {
+    if (!verifyStep) return;
+    setVerifyError('');
+    const res = await fetch('/api/verify/send', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ userId: verifyStep.userId, phone: verifyStep.phone }),
+    });
+    const result = await res.json();
+    if (res.ok) {
+      setVerifyStep(prev => prev ? { ...prev, devCode: result.devCode } : prev);
+      setVerifyError('New code sent!');
+    } else {
+      setVerifyError(result.error ?? 'Failed to resend code.');
+    }
   };
 
   const handleSignOut = async () => {
@@ -331,6 +402,62 @@ export default function CustomerApp() {
 
   // ── AUTH SCREEN ───────────────────────────────────────────────────────────
 
+  // Phone verification step (shown after signup before session is established)
+  if (verifyStep) {
+    return (
+      <div className="min-h-screen bg-gradient-to-br from-blue-50 to-indigo-100 flex items-center justify-center p-4">
+        <div className="w-full max-w-md">
+          <div className="text-center mb-8">
+            <div className="mx-auto mb-4 flex h-16 w-16 items-center justify-center rounded-full bg-blue-500">
+              <Shirt className="h-8 w-8 text-white" />
+            </div>
+            <h1 className="text-2xl font-bold">Verify your phone</h1>
+            <p className="text-gray-600 mt-1">We sent a 6-digit code to {verifyStep.phone}</p>
+            {verifyStep.devCode && (
+              <p className="text-xs text-amber-600 mt-2 bg-amber-50 border border-amber-200 rounded px-3 py-1 inline-block">
+                Dev mode — code: <strong>{verifyStep.devCode}</strong>
+              </p>
+            )}
+          </div>
+          <Card>
+            <CardContent className="pt-6">
+              <form onSubmit={handleVerifyCode} className="space-y-4">
+                <div>
+                  <Label htmlFor="otp">Verification Code</Label>
+                  <Input
+                    id="otp"
+                    value={verifyCode}
+                    onChange={(e) => setVerifyCode(e.target.value.replace(/\D/g, '').slice(0, 6))}
+                    placeholder="123456"
+                    maxLength={6}
+                    inputMode="numeric"
+                    className="text-center text-2xl tracking-widest"
+                    required
+                  />
+                </div>
+                {verifyError && (
+                  <p className={`text-sm ${verifyError === 'New code sent!' ? 'text-green-600' : 'text-red-500'}`}>
+                    {verifyError}
+                  </p>
+                )}
+                <Button type="submit" className="w-full" disabled={verifyLoading || verifyCode.length < 6}>
+                  {verifyLoading ? 'Verifying…' : 'Verify Phone'}
+                </Button>
+                <button
+                  type="button"
+                  onClick={handleResendCode}
+                  className="w-full text-sm text-blue-600 hover:underline"
+                >
+                  Resend code
+                </button>
+              </form>
+            </CardContent>
+          </Card>
+        </div>
+      </div>
+    );
+  }
+
   if (!session?.user) {
     return (
       <div className="min-h-screen bg-gradient-to-br from-blue-50 to-indigo-100 flex items-center justify-center p-4">
@@ -391,8 +518,8 @@ export default function CustomerApp() {
                     <Input id="su-email" type="email" value={authForm.email} onChange={(e) => setAuthForm({ ...authForm, email: e.target.value })} placeholder="jane@email.com" required />
                   </div>
                   <div>
-                    <Label htmlFor="su-phone">Phone Number <span className="text-gray-400 font-normal">(for pickup reminders)</span></Label>
-                    <Input id="su-phone" type="tel" value={authForm.phone} onChange={(e) => setAuthForm({ ...authForm, phone: e.target.value })} placeholder="(555) 123-4567" />
+                    <Label htmlFor="su-phone">Phone Number</Label>
+                    <Input id="su-phone" type="tel" value={authForm.phone} onChange={(e) => setAuthForm({ ...authForm, phone: e.target.value })} placeholder="(555) 123-4567" required />
                   </div>
                   <div>
                     <Label htmlFor="su-password">Password</Label>
