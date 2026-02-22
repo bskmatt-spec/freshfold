@@ -10,7 +10,7 @@ import {
   validatePromoCode, applyPromoCode as applyPromoAction,
   createOrder, createPayment, createSubscription as createSubAction,
   cancelSubscription as cancelSubAction,
-  updateOrder, createOrderStatusNotification,
+  updateOrder, updateUser, createOrderStatusNotification,
   markNotificationRead as markNotifRead, markAllNotificationsRead
 } from '@/lib/actions';
 import { calculatePlatformFee } from '@/lib/types';
@@ -115,15 +115,21 @@ export default function CustomerApp() {
     e.preventDefault();
     setAuthLoading(true);
     setAuthError('');
-    const { error } = await authClient.signUp.email({
+    const { data, error } = await authClient.signUp.email({
       name: authForm.name,
       email: authForm.email,
       password: authForm.password,
     });
-    setAuthLoading(false);
     if (error) {
       setAuthError(error.message ?? 'Sign up failed');
+      setAuthLoading(false);
+      return;
     }
+    // Save phone number to user record after signup
+    if (data?.user?.id && authForm.phone) {
+      await updateUser(data.user.id, { phone: authForm.phone });
+    }
+    setAuthLoading(false);
   };
 
   const handleSignOut = async () => {
@@ -375,6 +381,10 @@ export default function CustomerApp() {
                   <div>
                     <Label htmlFor="su-email">Email</Label>
                     <Input id="su-email" type="email" value={authForm.email} onChange={(e) => setAuthForm({ ...authForm, email: e.target.value })} placeholder="jane@email.com" required />
+                  </div>
+                  <div>
+                    <Label htmlFor="su-phone">Phone Number <span className="text-gray-400 font-normal">(for pickup reminders)</span></Label>
+                    <Input id="su-phone" type="tel" value={authForm.phone} onChange={(e) => setAuthForm({ ...authForm, phone: e.target.value })} placeholder="(555) 123-4567" />
                   </div>
                   <div>
                     <Label htmlFor="su-password">Password</Label>
