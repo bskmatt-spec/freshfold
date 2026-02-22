@@ -11,7 +11,7 @@ export const auth = betterAuth({
   database: drizzleAdapter(db, { provider: "pg", schema }),
   emailAndPassword: { enabled: true },
   plugins: [bearer()],
-  trustedOrigins: ["*"],
+  trustedOrigins: ["https://freshfold-blue.vercel.app", "http://localhost:4000"],
 })
 
 export async function getCurrentUser() {
