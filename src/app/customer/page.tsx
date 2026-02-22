@@ -1,7 +1,6 @@
 'use client';
 
 import { useEffect, useState, useCallback } from 'react';
-import { useRouter } from 'next/navigation';
 import { authClient, useSession, getAuthHeaders } from '@/lib/auth/client';
 import {
   findNearestLaundromat, getActiveServicesByLaundromat, createDefaultServices,
@@ -31,8 +30,7 @@ import {
 type Step = 'address' | 'schedule' | 'payment' | 'tracking';
 
 export default function CustomerApp() {
-  const { data: session, isPending } = useSession();
-  const router = useRouter();
+  const { data: session, isPending, refetch: refetchSession } = useSession();
 
   // Auth form (sign-up / sign-in)
   const [authTab, setAuthTab] = useState<'signin' | 'signup'>('signin');
@@ -105,9 +103,12 @@ export default function CustomerApp() {
       email: authForm.email,
       password: authForm.password,
     });
-    setAuthLoading(false);
     if (error) {
       setAuthError(error.message ?? 'Invalid email or password');
+      setAuthLoading(false);
+    } else {
+      await refetchSession();
+      setAuthLoading(false);
     }
   };
 
@@ -129,13 +130,14 @@ export default function CustomerApp() {
     if (data?.user?.id && authForm.phone) {
       await updateUser(data.user.id, { phone: authForm.phone });
     }
+    await refetchSession();
     setAuthLoading(false);
   };
 
   const handleSignOut = async () => {
     await authClient.signOut();
     localStorage.removeItem('bearer_token');
-    router.refresh();
+    await refetchSession();
   };
 
   // ── LAUNDROMAT SEARCH ─────────────────────────────────────────────────────
