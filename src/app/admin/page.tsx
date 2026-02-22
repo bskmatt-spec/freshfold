@@ -2,7 +2,7 @@
 
 import { useEffect, useState } from 'react';
 import { db } from '@/lib/db';
-import { User, Laundromat, Order, Payment, Service, PromoCode, Subscription, PLATFORM_FEE_PERCENT } from '@/lib/types';
+import { User, Laundromat, Order, Payment, Service, PromoCode, PLATFORM_FEE_PERCENT } from '@/lib/types';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
@@ -11,7 +11,7 @@ import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
 import { Badge } from '@/components/ui/badge';
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table';
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogTrigger } from '@/components/ui/dialog';
-import { Shield, Store, DollarSign, Package, Users, TrendingUp, MapPin, QrCode, Sparkles, Tag, Calendar, Plus } from 'lucide-react';
+import { Shield, Store, DollarSign, Package, TrendingUp, QrCode, Plus } from 'lucide-react';
 
 export default function AdminDashboard() {
   const [isAuthenticated, setIsAuthenticated] = useState(false);
@@ -21,7 +21,6 @@ export default function AdminDashboard() {
   const [payments, setPayments] = useState<Payment[]>([]);
   const [services, setServices] = useState<Service[]>([]);
   const [promoCodes, setPromoCodes] = useState<PromoCode[]>([]);
-  const [subscriptions, setSubscriptions] = useState<Subscription[]>([]);
   const [activeTab, setActiveTab] = useState('overview');
   const [selectedLaundromat, setSelectedLaundromat] = useState<string>('');
   const [newLaundromat, setNewLaundromat] = useState({
@@ -57,7 +56,6 @@ export default function AdminDashboard() {
     setPayments(db.payments.getAll());
     setServices(db.services.getAll());
     setPromoCodes(db.promoCodes.getAll());
-    setSubscriptions(db.subscriptions.getAll());
   };
 
   const handleLogin = (e: React.FormEvent) => {
@@ -105,7 +103,6 @@ export default function AdminDashboard() {
   const totalRevenue = payments.filter(p => p.status === 'completed').reduce((sum, p) => sum + p.amount, 0);
   const totalPlatformFees = payments.filter(p => p.status === 'completed').reduce((sum, p) => sum + p.platformFee, 0);
   const totalOrders = orders.length;
-  const completedOrders = orders.filter(o => o.status === 'delivered').length;
   const totalDiscounts = payments.filter(p => p.status === 'completed').reduce((sum, p) => sum + (p.discountAmount || 0), 0);
 
   const handleAddPromo = (e: React.FormEvent) => {

@@ -1,6 +1,5 @@
 import Link from 'next/link';
 import { Shirt, Store, Shield } from 'lucide-react';
-import { Button } from '@/components/ui/button';
 
 export default function Home() {
   return (
@@ -59,12 +58,6 @@ export default function Home() {
               <p className="text-gray-600">Manage partners, track revenue, and view analytics</p>
             </div>
           </Link>
-        </div>
-
-        <div className="mt-16 text-center">
-          <p className="text-sm text-gray-500">
-            Password for admin: <code className="bg-gray-200 px-2 py-1 rounded">admin</code>
-          </p>
         </div>
       </main>
     </div>

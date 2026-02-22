@@ -2,7 +2,7 @@
 
 import { useEffect, useState } from 'react';
 import { db } from '@/lib/db';
-import { User, Order, OrderWithDetails, Laundromat, Service, Notification, RECOMMENDED_SERVICES } from '@/lib/types';
+import { User, Order, OrderWithDetails, Laundromat, Service, Notification, Subscription, RECOMMENDED_SERVICES } from '@/lib/types';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
@@ -11,7 +11,7 @@ import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
 import { Badge } from '@/components/ui/badge';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogTrigger } from '@/components/ui/dialog';
-import { Package, Truck, CheckCircle, Clock, MapPin, User as UserIcon, Store, QrCode, DollarSign, Plus, Edit, Trash2, Sparkles, Bell, X, FileText } from 'lucide-react';
+import { Package, Truck, CheckCircle, Clock, MapPin, User as UserIcon, Store, QrCode, DollarSign, Plus, Edit, Trash2, Sparkles, Bell, X, FileText, RefreshCw } from 'lucide-react';
 
 export default function LaundromatPortal() {
   const [user, setUser] = useState<User | null>(null);
@@ -34,6 +34,7 @@ export default function LaundromatPortal() {
   const [notifications, setNotifications] = useState<Notification[]>([]);
   const [unreadCount, setUnreadCount] = useState(0);
   const [showNotifications, setShowNotifications] = useState(false);
+  const [subscriptions, setSubscriptions] = useState<Subscription[]>([]);
 
   useEffect(() => {
     db.init();
@@ -44,12 +45,12 @@ export default function LaundromatPortal() {
       const l = db.laundromats.getById(parsed.laundromatId!);
       if (l) {
         setLaundromat(l);
-        loadData(l.id);
+        loadData(l.id, parsed.id);
       }
     }
   }, []);
 
-  const loadData = (laundromatId: string) => {
+  const loadData = (laundromatId: string, userId?: string) => {
     const laundromatOrders = db.orders.getByLaundromat(laundromatId).map(o => db.orders.withDetails(o));
     setOrders(laundromatOrders);
 
@@ -69,10 +70,13 @@ export default function LaundromatPortal() {
       setServices(laundromatServices);
     }
 
-    if (user) {
-      setNotifications(db.notifications.getByUser(user.id));
-      setUnreadCount(db.notifications.getUnreadByUser(user.id).length);
+    const resolvedUserId = userId ?? user?.id;
+    if (resolvedUserId) {
+      setNotifications(db.notifications.getByUser(resolvedUserId));
+      setUnreadCount(db.notifications.getUnreadByUser(resolvedUserId).length);
     }
+
+    setSubscriptions(db.subscriptions.getByLaundromat(laundromatId));
   };
 
   const handleAuth = (e: React.FormEvent) => {
@@ -99,7 +103,7 @@ export default function LaundromatPortal() {
     setUser(existingUser);
     setLaundromat(l);
     localStorage.setItem('laundromat_user', JSON.stringify(existingUser));
-    loadData(l.id);
+    loadData(l.id, existingUser.id);
   };
 
   const updateOrderStatus = (orderId: string, status: Order['status']) => {
@@ -303,10 +307,11 @@ export default function LaundromatPortal() {
 
       <main className="mx-auto max-w-4xl p-4">
         <Tabs value={activeTab} onValueChange={setActiveTab}>
-          <TabsList className="grid w-full grid-cols-4">
+          <TabsList className="grid w-full grid-cols-5">
             <TabsTrigger value="orders">Orders</TabsTrigger>
             <TabsTrigger value="available">Available</TabsTrigger>
             <TabsTrigger value="services">Services</TabsTrigger>
+            <TabsTrigger value="subscriptions">Plans</TabsTrigger>
             <TabsTrigger value="drivers">Drivers</TabsTrigger>
           </TabsList>
 
@@ -496,6 +501,55 @@ export default function LaundromatPortal() {
                       </div>
                     </div>
                   ))
+                )}
+              </CardContent>
+            </Card>
+          </TabsContent>
+
+          <TabsContent value="subscriptions">
+            <Card>
+              <CardHeader>
+                <CardTitle>Active Subscription Plans</CardTitle>
+              </CardHeader>
+              <CardContent>
+                {subscriptions.length === 0 ? (
+                  <div className="py-12 text-center text-gray-500">
+                    <RefreshCw className="h-12 w-12 mx-auto mb-3 opacity-50" />
+                    <p>No active subscription plans</p>
+                  </div>
+                ) : (
+                  <div className="space-y-3">
+                    {subscriptions.map(sub => {
+                      const customer = db.users.getById(sub.customerId);
+                      const service = db.services.getById(sub.serviceId);
+                      return (
+                        <div key={sub.id} className="p-4 border rounded-lg bg-white">
+                          <div className="flex items-start justify-between">
+                            <div>
+                              <div className="flex items-center gap-2">
+                                <p className="font-medium">{customer?.name ?? 'Unknown Customer'}</p>
+                                <Badge variant="secondary" className="capitalize">{sub.frequency}</Badge>
+                              </div>
+                              <p className="text-sm text-gray-600">{customer?.email}</p>
+                              <p className="text-sm text-gray-600 mt-1">
+                                Service: {service?.name ?? sub.serviceId}
+                              </p>
+                              <p className="text-sm text-gray-600">
+                                Pickup day: {sub.pickupDay}
+                              </p>
+                              <p className="text-sm text-gray-600">
+                                Next pickup: {new Date(sub.nextPickup).toLocaleDateString()}
+                              </p>
+                            </div>
+                            <div className="text-right">
+                              <p className="font-bold">${sub.price.toFixed(2)}</p>
+                              <p className="text-xs text-gray-500">per cycle</p>
+                            </div>
+                          </div>
+                        </div>
+                      );
+                    })}
+                  </div>
                 )}
               </CardContent>
             </Card>
