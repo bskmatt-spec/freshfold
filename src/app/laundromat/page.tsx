@@ -2,7 +2,7 @@
 
 import { useEffect, useState } from 'react';
 import { db } from '@/lib/db';
-import { User, Order, OrderWithDetails, Laundromat } from '@/lib/types';
+import { User, Order, OrderWithDetails, Laundromat, Service, RECOMMENDED_SERVICES } from '@/lib/types';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
@@ -11,7 +11,7 @@ import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
 import { Badge } from '@/components/ui/badge';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogTrigger } from '@/components/ui/dialog';
-import { Package, Truck, CheckCircle, Clock, MapPin, User as UserIcon, Store, QrCode } from 'lucide-react';
+import { Package, Truck, CheckCircle, Clock, MapPin, User as UserIcon, Store, QrCode, DollarSign, Plus, Edit, Trash2, Sparkles } from 'lucide-react';
 
 export default function LaundromatPortal() {
   const [user, setUser] = useState<User | null>(null);
@@ -19,9 +19,18 @@ export default function LaundromatPortal() {
   const [orders, setOrders] = useState<OrderWithDetails[]>([]);
   const [availableOrders, setAvailableOrders] = useState<OrderWithDetails[]>([]);
   const [drivers, setDrivers] = useState<User[]>([]);
+  const [services, setServices] = useState<Service[]>([]);
   const [activeTab, setActiveTab] = useState('orders');
   const [authForm, setAuthForm] = useState({ email: '', laundromatId: '' });
   const [showQR, setShowQR] = useState(false);
+  const [editingService, setEditingService] = useState<Service | null>(null);
+  const [showAddService, setShowAddService] = useState(false);
+  const [newService, setNewService] = useState({
+    name: '',
+    description: '',
+    price: '',
+    useTemplate: ''
+  });
 
   useEffect(() => {
     db.init();
@@ -48,6 +57,14 @@ export default function LaundromatPortal() {
     
     const allUsers = db.users.getAll();
     setDrivers(allUsers.filter(u => u.role === 'driver' && u.laundromatId === laundromatId));
+    
+    const laundromatServices = db.services.getByLaundromat(laundromatId);
+    if (laundromatServices.length === 0) {
+      const defaults = db.services.createDefaultsForLaundromat(laundromatId);
+      setServices(defaults);
+    } else {
+      setServices(laundromatServices);
+    }
   };
 
   const handleAuth = (e: React.FormEvent) => {
@@ -91,6 +108,55 @@ export default function LaundromatPortal() {
     if (!user) return;
     db.orders.update(orderId, { driverId: user.id, status: 'picked_up' });
     if (laundromat) loadData(laundromat.id);
+  };
+
+  const handleUpdateService = (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!editingService) return;
+    
+    db.services.update(editingService.id, {
+      name: editingService.name,
+      description: editingService.description,
+      price: editingService.price
+    });
+    
+    setEditingService(null);
+    if (laundromat) loadData(laundromat.id);
+  };
+
+  const handleAddService = (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!laundromat) return;
+    
+    let template = RECOMMENDED_SERVICES.find(t => t.name === newService.useTemplate);
+    
+    db.services.create({
+      laundromatId: laundromat.id,
+      name: template ? template.name : newService.name,
+      description: template ? template.description : newService.description,
+      price: parseFloat(newService.price) || (template ? template.recommendedPrice : 0),
+      recommendedPrice: template ? template.recommendedPrice : (parseFloat(newService.price) || 0),
+      isActive: true
+    });
+    
+    setNewService({ name: '', description: '', price: '', useTemplate: '' });
+    setShowAddService(false);
+    loadData(laundromat.id);
+  };
+
+  const toggleServiceStatus = (serviceId: string) => {
+    const service = services.find(s => s.id === serviceId);
+    if (service) {
+      db.services.update(serviceId, { isActive: !service.isActive });
+      if (laundromat) loadData(laundromat.id);
+    }
+  };
+
+  const deleteService = (serviceId: string) => {
+    if (confirm('Delete this service?')) {
+      db.services.delete(serviceId);
+      if (laundromat) loadData(laundromat.id);
+    }
   };
 
   const getStatusIcon = (status: string) => {
@@ -209,9 +275,10 @@ export default function LaundromatPortal() {
 
       <main className="mx-auto max-w-4xl p-4">
         <Tabs value={activeTab} onValueChange={setActiveTab}>
-          <TabsList className="grid w-full grid-cols-3">
+          <TabsList className="grid w-full grid-cols-4">
             <TabsTrigger value="orders">Orders</TabsTrigger>
             <TabsTrigger value="available">Available</TabsTrigger>
+            <TabsTrigger value="services">Services</TabsTrigger>
             <TabsTrigger value="drivers">Drivers</TabsTrigger>
           </TabsList>
 
@@ -230,6 +297,7 @@ export default function LaundromatPortal() {
                     <div className="flex items-start justify-between mb-3">
                       <div>
                         <p className="font-medium">Order #{order.id.slice(0, 8)}</p>
+                        <p className="text-sm text-gray-600">{order.serviceName}</p>
                         <div className="flex items-center gap-1 text-sm text-gray-600">
                           {getStatusIcon(order.status)}
                           <span>{getStatusLabel(order.status)}</span>
@@ -303,7 +371,7 @@ export default function LaundromatPortal() {
                       <div className="flex items-start justify-between mb-3">
                         <div>
                           <p className="font-medium">Order #{order.id.slice(0, 8)}</p>
-                          <p className="text-sm text-gray-600">{order.serviceType === 'wash_fold' ? 'Wash & Fold' : 'Dry Cleaning'}</p>
+                          <p className="text-sm text-gray-600">{order.serviceName}</p>
                         </div>
                         <Badge>${order.price.toFixed(2)}</Badge>
                       </div>
@@ -325,6 +393,73 @@ export default function LaundromatPortal() {
                 </CardContent>
               </Card>
             )}
+          </TabsContent>
+
+          <TabsContent value="services" className="space-y-4">
+            <Card>
+              <CardHeader className="flex flex-row items-center justify-between">
+                <CardTitle>Your Services</CardTitle>
+                <Button size="sm" onClick={() => setShowAddService(true)}>
+                  <Plus className="h-4 w-4 mr-1" /> Add Service
+                </Button>
+              </CardHeader>
+              <CardContent className="space-y-3">
+                {services.length === 0 ? (
+                  <p className="text-gray-500 text-center py-8">No services configured</p>
+                ) : (
+                  services.map(service => (
+                    <div key={service.id} className={`p-4 border rounded-lg ${service.isActive ? 'bg-white' : 'bg-gray-50 opacity-60'}`}>
+                      <div className="flex items-start justify-between">
+                        <div className="flex-1">
+                          <div className="flex items-center gap-2">
+                            <p className="font-medium">{service.name}</p>
+                            {!service.isActive && <Badge variant="secondary">Inactive</Badge>}
+                            {service.price !== service.recommendedPrice && (
+                              <Badge variant="outline" className="text-orange-600 border-orange-200">
+                                Custom Price
+                              </Badge>
+                            )}
+                          </div>
+                          <p className="text-sm text-gray-600">{service.description}</p>
+                          <div className="flex items-center gap-4 mt-2">
+                            <div className="flex items-center gap-1">
+                              <DollarSign className="h-4 w-4 text-gray-400" />
+                              <span className="font-bold">${service.price.toFixed(2)}</span>
+                            </div>
+                            <div className="text-sm text-gray-500">
+                              Recommended: ${service.recommendedPrice.toFixed(2)}
+                            </div>
+                          </div>
+                        </div>
+                        <div className="flex gap-1">
+                          <Button 
+                            variant="ghost" 
+                            size="sm"
+                            onClick={() => setEditingService(service)}
+                          >
+                            <Edit className="h-4 w-4" />
+                          </Button>
+                          <Button 
+                            variant="ghost" 
+                            size="sm"
+                            onClick={() => toggleServiceStatus(service.id)}
+                          >
+                            {service.isActive ? 'Disable' : 'Enable'}
+                          </Button>
+                          <Button 
+                            variant="ghost" 
+                            size="sm"
+                            onClick={() => deleteService(service.id)}
+                          >
+                            <Trash2 className="h-4 w-4 text-red-500" />
+                          </Button>
+                        </div>
+                      </div>
+                    </div>
+                  ))
+                )}
+              </CardContent>
+            </Card>
           </TabsContent>
 
           <TabsContent value="drivers">
@@ -352,6 +487,129 @@ export default function LaundromatPortal() {
             </Card>
           </TabsContent>
         </Tabs>
+
+        <Dialog open={!!editingService} onOpenChange={() => setEditingService(null)}>
+          <DialogContent>
+            <DialogHeader>
+              <DialogTitle>Edit Service</DialogTitle>
+            </DialogHeader>
+            {editingService && (
+              <form onSubmit={handleUpdateService} className="space-y-4">
+                <div>
+                  <Label>Service Name</Label>
+                  <Input 
+                    value={editingService.name}
+                    onChange={(e) => setEditingService({...editingService, name: e.target.value})}
+                  />
+                </div>
+                <div>
+                  <Label>Description</Label>
+                  <Input 
+                    value={editingService.description}
+                    onChange={(e) => setEditingService({...editingService, description: e.target.value})}
+                  />
+                </div>
+                <div>
+                  <Label>Price ($)</Label>
+                  <Input 
+                    type="number"
+                    step="0.01"
+                    value={editingService.price}
+                    onChange={(e) => setEditingService({...editingService, price: parseFloat(e.target.value)})}
+                  />
+                  <p className="text-sm text-gray-500 mt-1">
+                    Recommended: ${editingService.recommendedPrice.toFixed(2)}
+                  </p>
+                </div>
+                <div className="flex gap-2">
+                  <Button type="button" variant="outline" onClick={() => setEditingService(null)} className="flex-1">Cancel</Button>
+                  <Button type="submit" className="flex-1">Save Changes</Button>
+                </div>
+              </form>
+            )}
+          </DialogContent>
+        </Dialog>
+
+        <Dialog open={showAddService} onOpenChange={setShowAddService}>
+          <DialogContent className="max-w-lg">
+            <DialogHeader>
+              <DialogTitle>Add New Service</DialogTitle>
+            </DialogHeader>
+            <form onSubmit={handleAddService} className="space-y-4">
+              <div>
+                <Label>Use Recommended Template (Optional)</Label>
+                <Select 
+                  value={newService.useTemplate} 
+                  onValueChange={(v) => {
+                    const template = RECOMMENDED_SERVICES.find(t => t.name === v);
+                    setNewService({
+                      ...newService,
+                      useTemplate: v,
+                      name: template?.name || '',
+                      description: template?.description || '',
+                      price: template?.recommendedPrice.toString() || ''
+                    });
+                  }}
+                >
+                  <SelectTrigger>
+                    <SelectValue placeholder="Select a template or create custom" />
+                  </SelectTrigger>
+                  <SelectContent>
+                    {RECOMMENDED_SERVICES.map(template => (
+                      <SelectItem key={template.name} value={template.name}>
+                        <div className="flex items-center gap-2">
+                          <Sparkles className="h-4 w-4 text-yellow-500" />
+                          <span>{template.name} - ${template.recommendedPrice}</span>
+                        </div>
+                      </SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
+                <p className="text-sm text-gray-500 mt-1">
+                  Choose from our recommended services or create your own
+                </p>
+              </div>
+
+              <div className="border-t pt-4">
+                <p className="text-sm font-medium mb-3">Or Create Custom Service</p>
+                
+                <div className="space-y-3">
+                  <div>
+                    <Label>Service Name</Label>
+                    <Input 
+                      value={newService.name}
+                      onChange={(e) => setNewService({...newService, name: e.target.value})}
+                      placeholder="e.g., Express Wash"
+                    />
+                  </div>
+                  <div>
+                    <Label>Description</Label>
+                    <Input 
+                      value={newService.description}
+                      onChange={(e) => setNewService({...newService, description: e.target.value})}
+                      placeholder="Describe the service..."
+                    />
+                  </div>
+                  <div>
+                    <Label>Price ($)</Label>
+                    <Input 
+                      type="number"
+                      step="0.01"
+                      value={newService.price}
+                      onChange={(e) => setNewService({...newService, price: e.target.value})}
+                      placeholder="0.00"
+                    />
+                  </div>
+                </div>
+              </div>
+
+              <div className="flex gap-2 pt-2">
+                <Button type="button" variant="outline" onClick={() => setShowAddService(false)} className="flex-1">Cancel</Button>
+                <Button type="submit" className="flex-1">Add Service</Button>
+              </div>
+            </form>
+          </DialogContent>
+        </Dialog>
       </main>
     </div>
   );

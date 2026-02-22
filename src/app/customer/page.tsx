@@ -2,20 +2,14 @@
 
 import { useEffect, useState } from 'react';
 import { db } from '@/lib/db';
-import { User, Laundromat, Order, ServiceType, calculatePlatformFee } from '@/lib/types';
+import { User, Laundromat, Order, Service, calculatePlatformFee } from '@/lib/types';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
-import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
 import { Badge } from '@/components/ui/badge';
 import { MapPin, Shirt, Clock, CreditCard, Package, CheckCircle, Truck, WashingMachine } from 'lucide-react';
-
-const SERVICE_PRICES: Record<ServiceType, number> = {
-  wash_fold: 25,
-  dry_cleaning: 45
-};
 
 export default function CustomerApp() {
   const [user, setUser] = useState<User | null>(null);
@@ -24,7 +18,8 @@ export default function CustomerApp() {
   const [lat, setLat] = useState(0);
   const [lon, setLon] = useState(0);
   const [nearestLaundromat, setNearestLaundromat] = useState<Laundromat | null>(null);
-  const [serviceType, setServiceType] = useState<ServiceType>('wash_fold');
+  const [services, setServices] = useState<Service[]>([]);
+  const [selectedService, setSelectedService] = useState<Service | null>(null);
   const [scheduledPickup, setScheduledPickup] = useState('');
   const [orders, setOrders] = useState<Order[]>([]);
   const [currentOrder, setCurrentOrder] = useState<Order | null>(null);
@@ -70,15 +65,24 @@ export default function CustomerApp() {
     const nearest = db.laundromats.findNearest(mockLat, mockLon);
     setNearestLaundromat(nearest || null);
     if (nearest) {
+      const laundromatServices = db.services.getActiveByLaundromat(nearest.id);
+      if (laundromatServices.length === 0) {
+        const defaults = db.services.createDefaultsForLaundromat(nearest.id);
+        setServices(defaults);
+        setSelectedService(defaults[0]);
+      } else {
+        setServices(laundromatServices);
+        setSelectedService(laundromatServices[0]);
+      }
       setStep('schedule');
     }
   };
 
   const handleSchedule = (e: React.FormEvent) => {
     e.preventDefault();
-    if (!user || !nearestLaundromat) return;
+    if (!user || !nearestLaundromat || !selectedService) return;
     
-    const price = SERVICE_PRICES[serviceType];
+    const price = selectedService.price;
     const platformFee = calculatePlatformFee(price);
     
     const order = db.orders.create({
@@ -92,7 +96,8 @@ export default function CustomerApp() {
       deliveryLatitude: lat,
       deliveryLongitude: lon,
       scheduledPickup,
-      serviceType,
+      serviceId: selectedService.id,
+      serviceName: selectedService.name,
       price,
       platformFee
     });
@@ -239,16 +244,31 @@ export default function CustomerApp() {
             <CardContent>
               <form onSubmit={handleSchedule} className="space-y-4">
                 <div>
-                  <Label>Service Type</Label>
-                  <Select value={serviceType} onValueChange={(v) => setServiceType(v as ServiceType)}>
-                    <SelectTrigger>
-                      <SelectValue />
-                    </SelectTrigger>
-                    <SelectContent>
-                      <SelectItem value="wash_fold">Wash & Fold - $25</SelectItem>
-                      <SelectItem value="dry_cleaning">Dry Cleaning - $45</SelectItem>
-                    </SelectContent>
-                  </Select>
+                  <Label>Select Service</Label>
+                  <div className="space-y-2 mt-2">
+                    {services.map(service => (
+                      <div
+                        key={service.id}
+                        onClick={() => setSelectedService(service)}
+                        className={`p-4 border-2 rounded-lg cursor-pointer transition-all ${
+                          selectedService?.id === service.id
+                            ? 'border-blue-500 bg-blue-50'
+                            : 'border-gray-200 hover:border-gray-300'
+                        }`}
+                      >
+                        <div className="flex justify-between items-start">
+                          <div>
+                            <p className="font-medium">{service.name}</p>
+                            <p className="text-sm text-gray-600">{service.description}</p>
+                            {service.price !== service.recommendedPrice && (
+                              <p className="text-xs text-orange-600 mt-1">Custom pricing</p>
+                            )}
+                          </div>
+                          <p className="font-bold text-lg">${service.price.toFixed(2)}</p>
+                        </div>
+                      </div>
+                    ))}
+                  </div>
                 </div>
                 <div>
                   <Label htmlFor="datetime">Pickup Date & Time</Label>
@@ -262,7 +282,7 @@ export default function CustomerApp() {
                 </div>
                 <div className="flex gap-2">
                   <Button type="button" variant="outline" onClick={() => setStep('address')} className="flex-1">Back</Button>
-                  <Button type="submit" className="flex-1">Continue</Button>
+                  <Button type="submit" className="flex-1" disabled={!selectedService}>Continue</Button>
                 </div>
               </form>
             </CardContent>
@@ -273,7 +293,7 @@ export default function CustomerApp() {
   }
 
   if (step === 'payment') {
-    const price = SERVICE_PRICES[serviceType];
+    const price = selectedService?.price || 0;
     const fee = calculatePlatformFee(price);
     return (
       <div className="min-h-screen bg-gradient-to-br from-blue-50 to-indigo-100 p-4">
@@ -286,6 +306,10 @@ export default function CustomerApp() {
               </CardTitle>
             </CardHeader>
             <CardContent className="space-y-4">
+              <div className="p-3 bg-blue-50 rounded-lg">
+                <p className="font-medium">{selectedService?.name}</p>
+                <p className="text-sm text-gray-600">{selectedService?.description}</p>
+              </div>
               <div className="space-y-2">
                 <div className="flex justify-between">
                   <span>Service</span>
@@ -332,6 +356,7 @@ export default function CustomerApp() {
                   <div>
                     <p className="font-medium">Order #{currentOrder.id.slice(0, 8)}</p>
                     <p className="text-sm text-gray-600">{getStatusLabel(currentOrder.status)}</p>
+                    <p className="text-sm text-gray-500">{currentOrder.serviceName}</p>
                   </div>
                   {getStatusIcon(currentOrder.status)}
                 </div>

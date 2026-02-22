@@ -25,7 +25,17 @@ export interface Laundromat {
 }
 
 export type OrderStatus = 'pending' | 'picked_up' | 'in_progress' | 'delivered' | 'cancelled';
-export type ServiceType = 'wash_fold' | 'dry_cleaning';
+
+export interface Service {
+  id: string;
+  laundromatId: string;
+  name: string;
+  description: string;
+  price: number;
+  recommendedPrice: number;
+  isActive: boolean;
+  createdAt: string;
+}
 
 export interface Order {
   id: string;
@@ -40,7 +50,8 @@ export interface Order {
   deliveryLatitude: number;
   deliveryLongitude: number;
   scheduledPickup: string;
-  serviceType: ServiceType;
+  serviceId: string;
+  serviceName: string;
   notes?: string;
   price: number;
   platformFee: number;
@@ -65,6 +76,34 @@ export interface OrderWithDetails extends Order {
 }
 
 export const PLATFORM_FEE_PERCENT = 15;
+
+export const RECOMMENDED_SERVICES = [
+  {
+    name: 'Wash & Fold',
+    description: 'Standard wash and fold service per bag',
+    recommendedPrice: 25
+  },
+  {
+    name: 'Dry Cleaning',
+    description: 'Professional dry cleaning service',
+    recommendedPrice: 45
+  },
+  {
+    name: 'Wash & Press',
+    description: 'Wash and press shirts',
+    recommendedPrice: 35
+  },
+  {
+    name: 'Bedding & Linens',
+    description: 'Wash and dry bedding, sheets, and linens',
+    recommendedPrice: 55
+  },
+  {
+    name: 'Express Service',
+    description: 'Same day delivery service',
+    recommendedPrice: 65
+  }
+];
 
 export function calculatePlatformFee(amount: number): number {
   return Math.round(amount * (PLATFORM_FEE_PERCENT / 100) * 100) / 100;

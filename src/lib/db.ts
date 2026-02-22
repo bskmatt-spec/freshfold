@@ -1,10 +1,11 @@
-import { User, Laundromat, Order, Payment, OrderWithDetails, calculateDistance } from './types';
+import { User, Laundromat, Order, Payment, OrderWithDetails, Service, RECOMMENDED_SERVICES, calculateDistance } from './types';
 
 const DB_KEY = 'laundry_app_db';
 
 interface Database {
   users: User[];
   laundromats: Laundromat[];
+  services: Service[];
   orders: Order[];
   payments: Payment[];
 }
@@ -12,6 +13,7 @@ interface Database {
 const defaultDb: Database = {
   users: [],
   laundromats: [],
+  services: [],
   orders: [],
   payments: []
 };
@@ -93,7 +95,7 @@ export const db = {
       const active = getDb().laundromats.filter(l => l.isActive);
       let nearest: Laundromat | undefined;
       let minDistance = Infinity;
-      
+
       for (const l of active) {
         const dist = calculateDistance(lat, lon, l.latitude, l.longitude);
         if (dist <= l.deliveryRadius && dist < minDistance) {
@@ -102,6 +104,53 @@ export const db = {
         }
       }
       return nearest;
+    }
+  },
+
+  services: {
+    getAll: (): Service[] => getDb().services,
+    getById: (id: string): Service | undefined => getDb().services.find(s => s.id === id),
+    getByLaundromat: (laundromatId: string): Service[] =>
+      getDb().services.filter(s => s.laundromatId === laundromatId && s.isActive),
+    getActiveByLaundromat: (laundromatId: string): Service[] =>
+      getDb().services.filter(s => s.laundromatId === laundromatId && s.isActive),
+    create: (service: Omit<Service, 'id' | 'createdAt'>): Service => {
+      const db = getDb();
+      const newService: Service = { ...service, id: generateId(), createdAt: new Date().toISOString() };
+      db.services.push(newService);
+      saveDb(db);
+      return newService;
+    },
+    update: (id: string, updates: Partial<Service>): Service | undefined => {
+      const db = getDb();
+      const index = db.services.findIndex(s => s.id === id);
+      if (index === -1) return undefined;
+      db.services[index] = { ...db.services[index], ...updates };
+      saveDb(db);
+      return db.services[index];
+    },
+    delete: (id: string): boolean => {
+      const db = getDb();
+      const index = db.services.findIndex(s => s.id === id);
+      if (index === -1) return false;
+      db.services.splice(index, 1);
+      saveDb(db);
+      return true;
+    },
+    createDefaultsForLaundromat: (laundromatId: string): Service[] => {
+      const created: Service[] = [];
+      for (const rec of RECOMMENDED_SERVICES) {
+        const service = db.services.create({
+          laundromatId,
+          name: rec.name,
+          description: rec.description,
+          price: rec.recommendedPrice,
+          recommendedPrice: rec.recommendedPrice,
+          isActive: true
+        });
+        created.push(service);
+      }
+      return created;
     }
   },
 

@@ -2,7 +2,7 @@
 
 import { useEffect, useState } from 'react';
 import { db } from '@/lib/db';
-import { User, Laundromat, Order, Payment, PLATFORM_FEE_PERCENT } from '@/lib/types';
+import { User, Laundromat, Order, Payment, Service, PLATFORM_FEE_PERCENT } from '@/lib/types';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
@@ -11,7 +11,7 @@ import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
 import { Badge } from '@/components/ui/badge';
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table';
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogTrigger } from '@/components/ui/dialog';
-import { Shield, Store, DollarSign, Package, Users, TrendingUp, MapPin, QrCode } from 'lucide-react';
+import { Shield, Store, DollarSign, Package, Users, TrendingUp, MapPin, QrCode, Sparkles } from 'lucide-react';
 
 export default function AdminDashboard() {
   const [isAuthenticated, setIsAuthenticated] = useState(false);
@@ -19,7 +19,9 @@ export default function AdminDashboard() {
   const [laundromats, setLaundromats] = useState<Laundromat[]>([]);
   const [orders, setOrders] = useState<Order[]>([]);
   const [payments, setPayments] = useState<Payment[]>([]);
+  const [services, setServices] = useState<Service[]>([]);
   const [activeTab, setActiveTab] = useState('overview');
+  const [selectedLaundromat, setSelectedLaundromat] = useState<string>('');
   const [newLaundromat, setNewLaundromat] = useState({
     name: '',
     address: '',
@@ -42,6 +44,7 @@ export default function AdminDashboard() {
     setLaundromats(db.laundromats.getAll());
     setOrders(db.orders.getAll());
     setPayments(db.payments.getAll());
+    setServices(db.services.getAll());
   };
 
   const handleLogin = (e: React.FormEvent) => {
@@ -55,7 +58,7 @@ export default function AdminDashboard() {
 
   const handleAddLaundromat = (e: React.FormEvent) => {
     e.preventDefault();
-    db.laundromats.create({
+    const laundromat = db.laundromats.create({
       name: newLaundromat.name,
       address: newLaundromat.address,
       latitude: parseFloat(newLaundromat.latitude),
@@ -65,6 +68,7 @@ export default function AdminDashboard() {
       email: newLaundromat.email,
       isActive: true
     });
+    db.services.createDefaultsForLaundromat(laundromat.id);
     setNewLaundromat({
       name: '',
       address: '',
@@ -143,10 +147,11 @@ export default function AdminDashboard() {
 
       <main className="mx-auto max-w-6xl p-4">
         <Tabs value={activeTab} onValueChange={setActiveTab}>
-          <TabsList className="grid w-full grid-cols-4">
+          <TabsList className="grid w-full grid-cols-5">
             <TabsTrigger value="overview">Overview</TabsTrigger>
             <TabsTrigger value="laundromats">Laundromats</TabsTrigger>
             <TabsTrigger value="orders">Orders</TabsTrigger>
+            <TabsTrigger value="services">Services</TabsTrigger>
             <TabsTrigger value="revenue">Revenue</TabsTrigger>
           </TabsList>
 
@@ -391,7 +396,7 @@ export default function AdminDashboard() {
                       <TableRow key={order.id}>
                         <TableCell>#{order.id.slice(0, 8)}</TableCell>
                         <TableCell>{db.laundromats.getById(order.laundromatId)?.name}</TableCell>
-                        <TableCell className="capitalize">{order.serviceType.replace('_', ' ')}</TableCell>
+                        <TableCell>{order.serviceName}</TableCell>
                         <TableCell>
                           <Badge variant={order.status === 'delivered' ? 'default' : 'secondary'}>
                             {order.status}
@@ -401,6 +406,66 @@ export default function AdminDashboard() {
                         <TableCell>${order.platformFee.toFixed(2)}</TableCell>
                       </TableRow>
                     ))}
+                  </TableBody>
+                </Table>
+              </CardContent>
+            </Card>
+          </TabsContent>
+
+          <TabsContent value="services">
+            <Card>
+              <CardHeader>
+                <CardTitle>Services by Laundromat</CardTitle>
+              </CardHeader>
+              <CardContent>
+                <div className="mb-4">
+                  <Label>Select Laundromat</Label>
+                  <select
+                    className="w-full p-2 border rounded-md"
+                    value={selectedLaundromat}
+                    onChange={(e) => setSelectedLaundromat(e.target.value)}
+                  >
+                    <option value="">All Laundromats</option>
+                    {laundromats.map(l => (
+                      <option key={l.id} value={l.id}>{l.name}</option>
+                    ))}
+                  </select>
+                </div>
+                <Table>
+                  <TableHeader>
+                    <TableRow>
+                      <TableHead>Laundromat</TableHead>
+                      <TableHead>Service</TableHead>
+                      <TableHead>Current Price</TableHead>
+                      <TableHead>Recommended</TableHead>
+                      <TableHead>Status</TableHead>
+                    </TableRow>
+                  </TableHeader>
+                  <TableBody>
+                    {services
+                      .filter(s => !selectedLaundromat || s.laundromatId === selectedLaundromat)
+                      .map(service => (
+                        <TableRow key={service.id}>
+                          <TableCell>{db.laundromats.getById(service.laundromatId)?.name}</TableCell>
+                          <TableCell>{service.name}</TableCell>
+                          <TableCell className={service.price !== service.recommendedPrice ? 'text-orange-600 font-medium' : ''}>
+                            ${service.price.toFixed(2)}
+                          </TableCell>
+                          <TableCell className="text-gray-500">
+                            ${service.recommendedPrice.toFixed(2)}
+                          </TableCell>
+                          <TableCell>
+                            <Badge variant={service.isActive ? 'default' : 'secondary'}>
+                              {service.isActive ? 'Active' : 'Inactive'}
+                            </Badge>
+                            {service.price !== service.recommendedPrice && (
+                              <Badge variant="outline" className="ml-2 text-orange-600 border-orange-200">
+                                Custom
+                              </Badge>
+                            )}
+                          </TableCell>
+                        </TableRow>
+                      ))}
                   </TableBody>
                 </Table>
               </CardContent>
