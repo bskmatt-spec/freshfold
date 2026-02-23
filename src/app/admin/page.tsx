@@ -31,6 +31,11 @@ export default function AdminDashboard() {
   const [newLaundromat, setNewLaundromat] = useState({
     name: '', address: '', latitude: '', longitude: '', deliveryRadius: '5', phone: '', email: '',
   });
+  const [editingLaundromat, setEditingLaundromat] = useState<Laundromat | null>(null);
+  const [editLaundromatData, setEditLaundromatData] = useState({
+    name: '', address: '', latitude: '', longitude: '', deliveryRadius: '5', phone: '', email: '',
+  });
+  const [showEditLaundromat, setShowEditLaundromat] = useState(false);
   const [selectedQR, setSelectedQR] = useState<Laundromat | null>(null);
   const [showAddPromo, setShowAddPromo] = useState(false);
   const [newPromo, setNewPromo] = useState({
@@ -106,6 +111,39 @@ export default function AdminDashboard() {
       await updateLaundromat(id, { isActive: !l.isActive });
       await loadData();
     }
+  };
+
+  const handleStartEditLaundromat = (l: Laundromat) => {
+    setEditingLaundromat(l);
+    setEditLaundromatData({
+      name: l.name,
+      address: l.address,
+      latitude: l.latitude.toString(),
+      longitude: l.longitude.toString(),
+      deliveryRadius: l.deliveryRadius.toString(),
+      phone: l.phone || '',
+      email: l.email || '',
+    });
+    setShowEditLaundromat(true);
+  };
+
+  const handleSubmitEdit = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!editingLaundromat) return;
+    setIsSubmitting(true);
+    await updateLaundromat(editingLaundromat.id, {
+      name: editLaundromatData.name,
+      address: editLaundromatData.address,
+      latitude: editLaundromatData.latitude ? parseFloat(editLaundromatData.latitude) : undefined,
+      longitude: editLaundromatData.longitude ? parseFloat(editLaundromatData.longitude) : undefined,
+      deliveryRadius: parseFloat(editLaundromatData.deliveryRadius),
+      phone: editLaundromatData.phone || undefined,
+      email: editLaundromatData.email || undefined,
+    });
+    setIsSubmitting(false);
+    setShowEditLaundromat(false);
+    setEditingLaundromat(null);
+    await loadData();
   };
 
   const handleAddPromo = async (e: React.FormEvent) => {
@@ -351,7 +389,11 @@ export default function AdminDashboard() {
                   <TableBody>
                     {laundromats.map(l => (
                       <TableRow key={l.id}>
-                        <TableCell>{l.name}</TableCell>
+                        <TableCell>
+                          <button className="text-blue-600 hover:underline" onClick={() => handleStartEditLaundromat(l)}>
+                            {l.name}
+                          </button>
+                        </TableCell>
                         <TableCell><code className="text-xs bg-gray-100 px-1 py-0.5 rounded">{l.id}</code></TableCell>
                         <TableCell>{l.deliveryRadius}</TableCell>
                         <TableCell>
@@ -633,6 +675,51 @@ export default function AdminDashboard() {
               <div className="flex gap-2">
                 <Button type="button" variant="outline" onClick={() => setShowAddPromo(false)} className="flex-1">Cancel</Button>
                 <Button type="submit" className="flex-1" disabled={isSubmitting}>{isSubmitting ? 'Creating…' : 'Create Promo'}</Button>
+              </div>
+            </form>
+          </DialogContent>
+        </Dialog>
+
+        {/* EDIT LAUNDROMAT DIALOG */}
+        <Dialog open={showEditLaundromat} onOpenChange={(open) => { if (!open) { setShowEditLaundromat(false); setEditingLaundromat(null); } }}>
+          <DialogContent>
+            <DialogHeader><DialogTitle>Edit Laundromat</DialogTitle></DialogHeader>
+            <form onSubmit={handleSubmitEdit} className="grid grid-cols-1 md:grid-cols-2 gap-4">
+              <div>
+                <Label>Name</Label>
+                <Input value={editLaundromatData.name} onChange={(e) => setEditLaundromatData({ ...editLaundromatData, name: e.target.value })} required />
+              </div>
+              <div>
+                <Label>Address</Label>
+                <Input value={editLaundromatData.address} onChange={(e) => setEditLaundromatData({ ...editLaundromatData, address: e.target.value })} required />
+              </div>
+              <div>
+                <Label>Delivery Radius (miles)</Label>
+                <Input type="number" value={editLaundromatData.deliveryRadius} onChange={(e) => setEditLaundromatData({ ...editLaundromatData, deliveryRadius: e.target.value })} required />
+              </div>
+              <div>
+                <Label>Latitude <span className="text-gray-400 font-normal text-xs">(optional)</span></Label>
+                <Input type="number" step="any" value={editLaundromatData.latitude} onChange={(e) => setEditLaundromatData({ ...editLaundromatData, latitude: e.target.value })} placeholder="e.g., 40.7128" />
+              </div>
+              <div>
+                <Label>Longitude <span className="text-gray-400 font-normal text-xs">(optional)</span></Label>
+                <Input type="number" step="any" value={editLaundromatData.longitude} onChange={(e) => setEditLaundromatData({ ...editLaundromatData, longitude: e.target.value })} placeholder="e.g., -74.0060" />
+              </div>
+              <div>
+                <Label>Phone <span className="text-gray-400 font-normal text-xs">(optional)</span></Label>
+                <Input type="tel" value={editLaundromatData.phone} onChange={(e) => setEditLaundromatData({ ...editLaundromatData, phone: e.target.value })} placeholder="(555) 123-4567" />
+              </div>
+              <div className="md:col-span-2">
+                <Label>Email <span className="text-gray-400 font-normal text-xs">(optional)</span></Label>
+                <Input type="email" value={editLaundromatData.email} onChange={(e) => setEditLaundromatData({ ...editLaundromatData, email: e.target.value })} placeholder="contact@laundromat.com" />
+              </div>
+              <div className="md:col-span-2">
+                <div className="flex gap-2">
+                  <Button type="button" variant="outline" onClick={() => setShowEditLaundromat(false)} className="flex-1">Cancel</Button>
+                  <Button type="submit" className="flex-1" disabled={isSubmitting}>
+                    {isSubmitting ? 'Saving…' : 'Save Changes'}
+                  </Button>
+                </div>
               </div>
             </form>
           </DialogContent>
