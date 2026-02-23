@@ -3,7 +3,7 @@
 import { useEffect, useState } from 'react';
 import {
   createLaundromat, updateLaundromat,
-  createPromoCode, updatePromoCode, getLaundromatById, sendLaundromatInvite,
+  createPromoCode, updatePromoCode, sendLaundromatInvite,
 } from '@/lib/actions';
 import { PLATFORM_FEE_PERCENT } from '@/lib/types';
 import type { Laundromat, Order, Payment, Service, PromoCode } from '@/db/schema';
@@ -88,17 +88,12 @@ export default function AdminDashboard() {
       setServices(svcs);
       setPromoCodes(promos);
 
-      // Resolve laundromat names for orders/services
+      // Resolve laundromat names for orders/services using the laundromats payload
       const ids = [...new Set([...os.map((o: any) => o.laundromatId), ...svcs.map((s: any) => s.laundromatId)])];
       const resolved: Record<string, Laundromat | null> = {};
-      await Promise.all(ids.map(async (id: string) => {
-        try {
-          resolved[id] = await getLaundromatById(id);
-        } catch (e) {
-          // Don't fail the whole load if a single lookup fails — record null
-          resolved[id] = null;
-        }
-      }));
+      ids.forEach((id: string) => {
+        resolved[id] = ls.find((l: Laundromat) => l.id === id) ?? null;
+      });
       setLaundromatIds(resolved);
     } catch (err) {
       // store error for debug UI and log to console
