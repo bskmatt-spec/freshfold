@@ -42,7 +42,25 @@ export const auth = betterAuth({
     },
   },
   plugins: [bearer()],
-  trustedOrigins: ["https://freshfold-blue.vercel.app", "http://localhost:4000"],
+  // Build a forgiving default list of trusted origins for dev and preview
+  // In production set NEXT_PUBLIC_SITE_URL and, if needed, TRUSTED_ORIGINS (comma-separated)
+  trustedOrigins: (
+    (process.env.TRUSTED_ORIGINS || "")
+      .split(",")
+      .map((s) => s.trim())
+      .filter(Boolean)
+      .concat([
+        process.env.NEXT_PUBLIC_SITE_URL,
+        "https://freshfold-blue.vercel.app",
+        "http://localhost:4000",
+        "http://localhost:3000",
+        "http://127.0.0.1:4000",
+        "http://127.0.0.1:3000",
+      ])
+      .filter(Boolean)
+      // de-duplicate
+      .filter((v, i, a) => a.indexOf(v) === i)
+  ),
 })
 
 export async function getCurrentUser() {
