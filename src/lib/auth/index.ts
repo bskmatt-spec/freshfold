@@ -14,22 +14,22 @@ export const auth = betterAuth({
   emailAndPassword: {
     enabled: true,
     sendResetPassword: async ({ user, url }) => {
-      const apiKey = process.env.RESEND_API_KEY
+      const apiKey = process.env.BREVO_API_KEY
       if (!apiKey) {
-        console.warn("RESEND_API_KEY not set — password reset email not sent. Reset URL:", url)
+        console.warn("BREVO_API_KEY not set — password reset URL:", url)
         return
       }
-      await fetch("https://api.resend.com/emails", {
+      const res = await fetch("https://api.brevo.com/v3/smtp/email", {
         method: "POST",
         headers: {
-          Authorization: `Bearer ${apiKey}`,
+          "api-key": apiKey,
           "Content-Type": "application/json",
         },
         body: JSON.stringify({
-          from: "FreshFold <onboarding@resend.dev>",
-          to: user.email,
+          sender: { name: "FreshFold", email: "noreply@freshfold-blue.vercel.app" },
+          to: [{ email: user.email, name: user.name ?? user.email }],
           subject: "Reset your FreshFold password",
-          html: `
+          htmlContent: `
             <div style="font-family:sans-serif;max-width:480px;margin:0 auto;padding:24px">
               <h2 style="color:#3b82f6">Reset your password</h2>
               <p>Hi ${user.name ?? "there"},</p>
@@ -41,6 +41,10 @@ export const auth = betterAuth({
           `,
         }),
       })
+      if (!res.ok) {
+        const err = await res.text()
+        console.error("Brevo email error:", err)
+      }
     },
   },
   plugins: [bearer()],
