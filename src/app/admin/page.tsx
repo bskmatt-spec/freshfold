@@ -43,6 +43,11 @@ export default function AdminDashboard() {
   const [laundromatIds, setLaundromatIds] = useState<Record<string, Laundromat | null>>({});
   const [isSubmitting, setIsSubmitting] = useState(false);
 
+  // Debug panel state (temporary, helps iPhone users without devtools)
+  const [debugOpen, setDebugOpen] = useState(false);
+  const [debugRaw, setDebugRaw] = useState<string | null>(null);
+  const [debugError, setDebugError] = useState<string | null>(null);
+
   // Invite state
   const [inviteLaundromat, setInviteLaundromat] = useState<Laundromat | null>(null);
   const [inviteEmail, setInviteEmail] = useState('');
@@ -63,9 +68,20 @@ export default function AdminDashboard() {
   }, []);
 
   const loadData = async () => {
+    setDebugError(null);
     try {
       const res = await fetch('/api/admin/data');
-      const { laundromats: ls, orders: os, payments: ps, services: svcs, promos } = await res.json();
+      const text = await res.text();
+      setDebugRaw(text);
+
+      let parsed: any;
+      try {
+        parsed = JSON.parse(text);
+      } catch (parseErr) {
+        throw new Error(`Invalid JSON from /api/admin/data: ${parseErr instanceof Error ? parseErr.message : String(parseErr)}`);
+      }
+
+      const { laundromats: ls, orders: os, payments: ps, services: svcs, promos } = parsed;
       setLaundromats(ls);
       setOrders(os);
       setPayments(ps);
@@ -76,11 +92,19 @@ export default function AdminDashboard() {
       const ids = [...new Set([...os.map((o: any) => o.laundromatId), ...svcs.map((s: any) => s.laundromatId)])];
       const resolved: Record<string, Laundromat | null> = {};
       await Promise.all(ids.map(async (id: string) => {
-        resolved[id] = await getLaundromatById(id);
+        try {
+          resolved[id] = await getLaundromatById(id);
+        } catch (e) {
+          // Don't fail the whole load if a single lookup fails — record null
+          resolved[id] = null;
+        }
       }));
       setLaundromatIds(resolved);
     } catch (err) {
-      console.error('Failed to load admin data:', err);
+      // store error for debug UI and log to console
+      const message = err instanceof Error ? err.message : String(err);
+      console.error('Failed to load admin data:', message, err);
+      setDebugError(message);
     }
   };
 
@@ -228,11 +252,32 @@ export default function AdminDashboard() {
             <Button variant="ghost" size="sm" onClick={() => setIsAuthenticated(false)} className="text-gray-300 hover:text-white">
               Sign Out
             </Button>
+            <Button variant="outline" size="sm" onClick={async () => { setDebugOpen(v => !v); if (!debugOpen) await loadData(); }} className="text-gray-300">
+              Debug
+            </Button>
           </div>
         </div>
       </header>
 
       <main className="mx-auto max-w-6xl p-4">
+        {debugOpen && (
+          <div className="mb-4 p-3 rounded border bg-white">
+            <div className="flex items-center justify-between mb-2">
+              <div className="text-sm font-medium">Debug panel — /api/admin/data</div>
+              <div className="flex items-center gap-2">
+                <Button size="sm" variant="outline" onClick={async () => { await loadData(); }}>
+                  Refresh
+                </Button>
+                <Button size="sm" variant="outline" onClick={() => { try { navigator.clipboard?.writeText(debugRaw ?? ''); alert('Copied debug output to clipboard'); } catch { alert('Copy not supported'); } }}>
+                  Copy
+                </Button>
+                <Button size="sm" variant="ghost" onClick={() => setDebugOpen(false)}>Close</Button>
+              </div>
+            </div>
+            {debugError && <div className="text-sm text-red-600 mb-2">Error: {debugError}</div>}
+            <pre className="max-h-72 overflow-auto text-xs p-2 bg-gray-50 rounded border">{debugRaw ?? 'No response yet. Click Refresh.'}</pre>
+          </div>
+        )}
         <Tabs value={activeTab} onValueChange={setActiveTab}>
           <TabsList className="flex w-full overflow-x-auto gap-1 h-auto p-1 mb-2">
             <TabsTrigger value="overview" className="flex-shrink-0">Overview</TabsTrigger>
