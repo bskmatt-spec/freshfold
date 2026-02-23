@@ -26,7 +26,7 @@ export const auth = betterAuth({
           "Content-Type": "application/json",
         },
         body: JSON.stringify({
-          from: "FreshFold <noreply@freshfold-blue.vercel.app>",
+          from: "FreshFold <onboarding@resend.dev>",
           to: user.email,
           subject: "Reset your FreshFold password",
           html: `
