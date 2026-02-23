@@ -390,7 +390,7 @@ export default function AdminDashboard() {
                     {laundromats.map(l => (
                       <TableRow key={l.id}>
                         <TableCell>
-                          <button className="text-blue-600 hover:underline" onClick={() => handleStartEditLaundromat(l)}>
+                          <button className="text-blue-600 hover:underline cursor-pointer" onClick={() => handleStartEditLaundromat(l)}>
                             {l.name}
                           </button>
                         </TableCell>
@@ -419,7 +419,10 @@ export default function AdminDashboard() {
                             {l.inviteEmail ? 'Re-invite' : 'Invite'}
                           </Button>
                         </TableCell>
-                        <TableCell>
+                        <TableCell className="flex gap-2">
+                          <Button variant="outline" size="sm" onClick={() => handleStartEditLaundromat(l)}>
+                            Edit
+                          </Button>
                           <Button variant="outline" size="sm" onClick={() => toggleLaundromatStatus(l.id)}>
                             {l.isActive ? 'Deactivate' : 'Activate'}
                           </Button>
