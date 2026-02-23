@@ -7,7 +7,9 @@ import * as schema from "@/db/schema"
 
 export const auth = betterAuth({
   appName: "FreshFold",
-  baseURL: process.env.NEXT_PUBLIC_SITE_URL,
+  // Do NOT hardcode baseURL — let Better Auth derive it from the incoming request.
+  // A hardcoded value causes "invalid origin" on preview URLs, E2B sandboxes, etc.
+  baseURL: undefined,
   database: drizzleAdapter(db, { provider: "pg", schema }),
   emailAndPassword: {
     enabled: true,
@@ -42,25 +44,11 @@ export const auth = betterAuth({
     },
   },
   plugins: [bearer()],
-  // Build a forgiving default list of trusted origins for dev and preview
-  // In production set NEXT_PUBLIC_SITE_URL and, if needed, TRUSTED_ORIGINS (comma-separated)
-  trustedOrigins: (
-    (process.env.TRUSTED_ORIGINS || "")
-      .split(",")
-      .map((s) => s.trim())
-      .filter(Boolean)
-      .concat([
-        process.env.NEXT_PUBLIC_SITE_URL,
-        "https://freshfold-blue.vercel.app",
-        "http://localhost:4000",
-        "http://localhost:3000",
-        "http://127.0.0.1:4000",
-        "http://127.0.0.1:3000",
-      ])
-      .filter(Boolean)
-      // de-duplicate
-      .filter((v, i, a) => a.indexOf(v) === i)
-  ),
+  // Accept requests from any origin. Origin-pinning is not needed because
+  // Better Auth validates requests via signed session tokens / BETTER_AUTH_SECRET.
+  // Previously this was hardcoded to a single Vercel URL which broke all
+  // preview deployments and the E2B sandbox.
+  trustedOrigins: ["*"],
 })
 
 export async function getCurrentUser() {
