@@ -113,18 +113,10 @@ export default function AdminDashboard() {
     }
   };
 
+  // Navigate to dedicated edit page to avoid dialog focus/scroll issues
   const handleStartEditLaundromat = (l: Laundromat) => {
-    setEditingLaundromat(l);
-    setEditLaundromatData({
-      name: l.name,
-      address: l.address,
-      latitude: l.latitude.toString(),
-      longitude: l.longitude.toString(),
-      deliveryRadius: l.deliveryRadius.toString(),
-      phone: l.phone || '',
-      email: l.email || '',
-    });
-    setShowEditLaundromat(true);
+    // client-side navigation — using window.location avoids dialog focus problems
+    window.location.href = `/admin/laundromats/${l.id}`;
   };
 
   const handleSubmitEdit = async (e: React.FormEvent) => {
@@ -216,6 +208,13 @@ export default function AdminDashboard() {
     );
   }
 
+  useEffect(() => {
+    // Disable automatic scroll restoration to avoid browser snapping when state updates
+    if (typeof window !== 'undefined' && 'scrollRestoration' in history) {
+      try { history.scrollRestoration = 'manual'; } catch {}
+    }
+  }, []);
+
   return (
     <div className="min-h-screen bg-gray-50">
       <header className="bg-gray-900 text-white px-4 py-4">
@@ -224,9 +223,14 @@ export default function AdminDashboard() {
             <Shield className="h-6 w-6" />
             <h1 className="font-semibold text-lg">Admin Dashboard</h1>
           </div>
-          <Button variant="ghost" size="sm" onClick={() => setIsAuthenticated(false)} className="text-gray-300 hover:text-white">
-            Sign Out
-          </Button>
+          <div className="flex items-center gap-2">
+            <Button variant="ghost" size="sm" onClick={() => window.location.href = '/'} className="text-gray-300 hover:text-white">
+              Back to site
+            </Button>
+            <Button variant="ghost" size="sm" onClick={() => setIsAuthenticated(false)} className="text-gray-300 hover:text-white">
+              Sign Out
+            </Button>
+          </div>
         </div>
       </header>
 
