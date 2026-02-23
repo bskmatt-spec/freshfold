@@ -2,8 +2,7 @@
 
 import { useEffect, useState } from 'react';
 import {
-  getAllLaundromats, getAllOrders, getAllPayments, getAllServices,
-  getAllPromoCodes, createLaundromat, updateLaundromat,
+  createLaundromat, updateLaundromat,
   createPromoCode, updatePromoCode, getLaundromatById, sendLaundromatInvite,
 } from '@/lib/actions';
 import { PLATFORM_FEE_PERCENT } from '@/lib/types';
@@ -64,26 +63,25 @@ export default function AdminDashboard() {
   }, []);
 
   const loadData = async () => {
-    const [ls, os, ps, svcs, promos] = await Promise.all([
-      getAllLaundromats(),
-      getAllOrders(),
-      getAllPayments(),
-      getAllServices(),
-      getAllPromoCodes(),
-    ]);
-    setLaundromats(ls);
-    setOrders(os);
-    setPayments(ps);
-    setServices(svcs);
-    setPromoCodes(promos);
+    try {
+      const res = await fetch('/api/admin/data');
+      const { laundromats: ls, orders: os, payments: ps, services: svcs, promos } = await res.json();
+      setLaundromats(ls);
+      setOrders(os);
+      setPayments(ps);
+      setServices(svcs);
+      setPromoCodes(promos);
 
-    // Resolve laundromat names for orders/services
-    const ids = [...new Set([...os.map(o => o.laundromatId), ...svcs.map(s => s.laundromatId)])];
-    const resolved: Record<string, Laundromat | null> = {};
-    await Promise.all(ids.map(async id => {
-      resolved[id] = await getLaundromatById(id);
-    }));
-    setLaundromatIds(resolved);
+      // Resolve laundromat names for orders/services
+      const ids = [...new Set([...os.map((o: any) => o.laundromatId), ...svcs.map((s: any) => s.laundromatId)])];
+      const resolved: Record<string, Laundromat | null> = {};
+      await Promise.all(ids.map(async (id: string) => {
+        resolved[id] = await getLaundromatById(id);
+      }));
+      setLaundromatIds(resolved);
+    } catch (err) {
+      console.error('Failed to load admin data:', err);
+    }
   };
 
   const handleLogin = (e: React.FormEvent) => {
