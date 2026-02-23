@@ -13,8 +13,8 @@ export const authClient = createAuthClient({
     onSuccess: (ctx) => {
       const authToken = ctx.response.headers.get("set-auth-token")
       if (authToken) {
-        const tokenPart = authToken.includes(".") ? authToken.split(".")[0] : authToken
-        localStorage.setItem("bearer_token", tokenPart)
+        // store the full token (not just the first segment)
+        localStorage.setItem("bearer_token", authToken)
       }
     },
   },
