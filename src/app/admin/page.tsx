@@ -1,6 +1,6 @@
-'use client';
+"use client";
 
-import { useEffect, useState } from 'react';
+import React, { useEffect, useState } from 'react';
 import {
   createLaundromat, updateLaundromat,
   createPromoCode, updatePromoCode, sendLaundromatInvite,
@@ -209,26 +209,28 @@ export default function AdminDashboard() {
 
   if (!isAuthenticated) {
     return (
-      <div className="min-h-screen bg-gray-900 flex items-center justify-center p-4">
-        <Card className="w-full max-w-md">
-          <CardHeader className="text-center">
-            <div className="mx-auto mb-4 flex h-16 w-16 items-center justify-center rounded-full bg-gray-800">
-              <Shield className="h-8 w-8 text-white" />
-            </div>
-            <CardTitle className="text-2xl text-white">Admin Dashboard</CardTitle>
-          </CardHeader>
-          <CardContent>
-            <form onSubmit={handleLogin} className="space-y-4">
-              <div>
-                <Label htmlFor="password" className="text-white">Password</Label>
-                <Input id="password" type="password" value={password} onChange={(e) => setPassword(e.target.value)}
-                  placeholder="Enter admin password" required className="bg-gray-800 border-gray-700 text-white" />
+      <ErrorBoundary onReset={() => { setPassword(''); setIsAuthenticated(false); }}>
+        <div className="min-h-screen bg-gray-900 flex items-center justify-center p-4">
+          <Card className="w-full max-w-md">
+            <CardHeader className="text-center">
+              <div className="mx-auto mb-4 flex h-16 w-16 items-center justify-center rounded-full bg-gray-800">
+                <Shield className="h-8 w-8 text-white" />
               </div>
-              <Button type="submit" className="w-full">Sign In</Button>
-            </form>
-          </CardContent>
-        </Card>
-      </div>
+              <CardTitle className="text-2xl text-white">Admin Dashboard</CardTitle>
+            </CardHeader>
+            <CardContent>
+              <form onSubmit={handleLogin} className="space-y-4">
+                <div>
+                  <Label htmlFor="password" className="text-white">Password</Label>
+                  <Input id="password" type="password" value={password} onChange={(e) => setPassword(e.target.value)}
+                    placeholder="Enter admin password" required className="bg-gray-800 border-gray-700 text-white" />
+                </div>
+                <Button type="submit" className="w-full">Sign In</Button>
+              </form>
+            </CardContent>
+          </Card>
+        </div>
+      </ErrorBoundary>
     );
   }
 
