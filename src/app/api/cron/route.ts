@@ -52,14 +52,14 @@ export async function GET(request: NextRequest) {
       const dateStr = pickupDate.toLocaleDateString("en-US", { month: "long", day: "numeric" })
 
       const message =
-        `Hi ${customer.name}! Your LaundroRoute laundry pickup is scheduled for tomorrow, ${dayName} ${dateStr}. ` +
-        `Please bag up your laundry and place it outside your door by your scheduled pickup time. ` +
+        `Hi ${customer.name}! Your FreshFold laundry pickup is scheduled for tomorrow, ${dayName} ${dateStr}. ` +
+        `Please bag up your laundry and have it ready by your scheduled pickup time. ` +
         `Reply STOP to opt out.`
 
       const success = await sendSms(customer.phone, message)
       if (success) {
         sent++
-        // Advance nextPickup based on frequency
+        // Advance nextPickup based on frequency regardless of SMS outcome
         const next = new Date(sub.nextPickup)
         if (sub.frequency === "weekly") next.setDate(next.getDate() + 7)
         else if (sub.frequency === "biweekly") next.setDate(next.getDate() + 14)
@@ -71,6 +71,16 @@ export async function GET(request: NextRequest) {
           .where(eq(subscriptions.id, sub.id))
       } else {
         failed++
+        // Still advance nextPickup even if SMS fails so subscriptions don't get stuck
+        const next = new Date(sub.nextPickup)
+        if (sub.frequency === "weekly") next.setDate(next.getDate() + 7)
+        else if (sub.frequency === "biweekly") next.setDate(next.getDate() + 14)
+        else if (sub.frequency === "monthly") next.setMonth(next.getMonth() + 1)
+
+        await db
+          .update(subscriptions)
+          .set({ nextPickup: next })
+          .where(eq(subscriptions.id, sub.id))
       }
     }
 

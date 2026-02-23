@@ -24,7 +24,7 @@ import { Badge } from '@/components/ui/badge';
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from '@/components/ui/dialog';
 import {
   MapPin, Shirt, Clock, CreditCard, Package, CheckCircle, Truck,
-  Bell, Tag, Calendar, X, ChevronRight, Home, History, LogOut, Eye, EyeOff,
+  Bell, Tag, Calendar, X, ChevronRight, Home, ClipboardList, LogOut, Eye, EyeOff,
 } from 'lucide-react';
 import { loadStripe } from '@stripe/stripe-js';
 import { Elements, PaymentElement, useStripe, useElements } from '@stripe/react-stripe-js';
@@ -815,7 +815,7 @@ export default function CustomerApp() {
         </div>
         <div className="mx-auto max-w-md flex justify-around mt-2 border-t pt-2">
           {(['home', 'orders', 'subscriptions'] as const).map(tab => {
-            const icons = { home: <Home className="h-4 w-4" />, orders: <History className="h-4 w-4" />, subscriptions: <Calendar className="h-4 w-4" /> };
+            const icons = { home: <Home className="h-4 w-4" />, orders: <ClipboardList className="h-4 w-4" />, subscriptions: <Calendar className="h-4 w-4" /> };
             const labels = { home: 'Home', orders: 'Orders', subscriptions: 'Plans' };
             return (
               <button key={tab} onClick={() => setActiveTab(tab)}

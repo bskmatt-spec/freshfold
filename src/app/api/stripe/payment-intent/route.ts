@@ -7,6 +7,9 @@ import { nanoid } from "@/lib/actions/utils"
 import { calculatePlatformFee } from "@/lib/types"
 
 export async function POST(request: NextRequest) {
+  let orderId: string | null = null
+  let paymentId: string | null = null
+
   try {
     const {
       laundromatId,
@@ -35,13 +38,14 @@ export async function POST(request: NextRequest) {
 
     if (!laundromat.stripeAccountId) {
       return NextResponse.json(
-        { error: "This laundromat has not connected their Stripe account yet." },
+        { error: "This laundromat has not connected their Stripe account yet. Please try again later." },
         { status: 400 }
       )
     }
 
-    // Calculate discount if promo code provided
+    // Validate promo code but DO NOT increment usage yet — webhook does that on success
     let discount = 0
+    let promoCodeId: string | null = null
     if (promoCode) {
       const [promo] = await db
         .select()
@@ -65,11 +69,7 @@ export async function POST(request: NextRequest) {
             Math.round(basePrice * (promo.discountPercent / 100) * 100) / 100,
             promo.maxDiscount
           )
-          // Increment usage count
-          await db
-            .update(promoCodes)
-            .set({ usageCount: promo.usageCount + 1 })
-            .where(eq(promoCodes.id, promo.id))
+          promoCodeId = promo.id
         }
       }
     }
@@ -79,35 +79,33 @@ export async function POST(request: NextRequest) {
     const laundromatPayout = finalPrice - platformFee
     const totalCharge = finalPrice + platformFee
 
-    // Create the order first (pending payment)
-    const [order] = await db
-      .insert(orders)
-      .values({
-        id: nanoid(),
-        customerId,
-        laundromatId,
-        driverId: null,
-        status: "pending",
-        pickupAddress,
-        pickupLatitude: pickupLatitude ?? 0,
-        pickupLongitude: pickupLongitude ?? 0,
-        deliveryAddress: pickupAddress,
-        deliveryLatitude: pickupLatitude ?? 0,
-        deliveryLongitude: pickupLongitude ?? 0,
-        scheduledPickup: new Date(scheduledPickup),
-        serviceId,
-        serviceName,
-        notes: notes || null,
-        price: finalPrice,
-        platformFee,
-      })
-      .returning()
+    // Create order (status: pending — confirmed by webhook on payment success)
+    orderId = nanoid()
+    await db.insert(orders).values({
+      id: orderId,
+      customerId,
+      laundromatId,
+      driverId: null,
+      status: "pending",
+      pickupAddress,
+      pickupLatitude: pickupLatitude ?? 0,
+      pickupLongitude: pickupLongitude ?? 0,
+      deliveryAddress: pickupAddress,
+      deliveryLatitude: pickupLatitude ?? 0,
+      deliveryLongitude: pickupLongitude ?? 0,
+      scheduledPickup: new Date(scheduledPickup),
+      serviceId,
+      serviceName,
+      notes: notes || null,
+      price: finalPrice,
+      platformFee,
+    })
 
     // Create a pending payment record
-    const paymentId = nanoid()
+    paymentId = nanoid()
     await db.insert(payments).values({
       id: paymentId,
-      orderId: order.id,
+      orderId,
       amount: finalPrice,
       platformFee,
       laundromatPayout,
@@ -117,9 +115,9 @@ export async function POST(request: NextRequest) {
       status: "pending",
     })
 
-    // Create Stripe PaymentIntent with Connect transfer
-    // application_fee_amount = platform fee (what FreshFold keeps)
-    // transfer_data.destination = laundromat's Stripe account (gets the rest)
+    // Create Stripe PaymentIntent
+    // application_fee_amount = platform fee (stays in FreshFold account)
+    // transfer_data.destination = laundromat gets the rest automatically
     const paymentIntent = await stripe.paymentIntents.create({
       amount: toCents(totalCharge),
       currency: "usd",
@@ -128,10 +126,13 @@ export async function POST(request: NextRequest) {
         destination: laundromat.stripeAccountId,
       },
       metadata: {
-        orderId: order.id,
+        orderId,
         paymentId,
         customerId,
         laundromatId,
+        // Pass promo info to webhook so it can increment usage on success only
+        promoCode: promoCode ?? "",
+        promoCodeId: promoCodeId ?? "",
       },
     })
 
@@ -143,7 +144,7 @@ export async function POST(request: NextRequest) {
 
     return NextResponse.json({
       clientSecret: paymentIntent.client_secret,
-      orderId: order.id,
+      orderId,
       total: totalCharge,
       breakdown: {
         service: basePrice,
@@ -155,6 +156,15 @@ export async function POST(request: NextRequest) {
     })
   } catch (err) {
     console.error("Payment intent error:", err)
-    return NextResponse.json({ error: "Failed to create payment" }, { status: 500 })
+
+    // Clean up orphaned DB records if Stripe call failed
+    if (paymentId) {
+      await db.delete(payments).where(eq(payments.id, paymentId)).catch(() => {})
+    }
+    if (orderId) {
+      await db.delete(orders).where(eq(orders.id, orderId)).catch(() => {})
+    }
+
+    return NextResponse.json({ error: "Failed to create payment. Please try again." }, { status: 500 })
   }
 }
