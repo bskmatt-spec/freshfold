@@ -56,6 +56,13 @@ export default function AdminDashboard() {
     }
   }, [isAuthenticated]);
 
+  useEffect(() => {
+    // Disable automatic scroll restoration to avoid browser snapping when state updates
+    if (typeof window !== 'undefined' && 'scrollRestoration' in history) {
+      try { history.scrollRestoration = 'manual'; } catch {}
+    }
+  }, []);
+
   const loadData = async () => {
     const [ls, os, ps, svcs, promos] = await Promise.all([
       getAllLaundromats(),
@@ -207,13 +214,6 @@ export default function AdminDashboard() {
       </div>
     );
   }
-
-  useEffect(() => {
-    // Disable automatic scroll restoration to avoid browser snapping when state updates
-    if (typeof window !== 'undefined' && 'scrollRestoration' in history) {
-      try { history.scrollRestoration = 'manual'; } catch {}
-    }
-  }, []);
 
   return (
     <div className="min-h-screen bg-gray-50">
