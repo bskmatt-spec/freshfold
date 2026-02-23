@@ -72,6 +72,8 @@ export const laundromats = pgTable("laundromats", {
   phone: text("phone").default("").notNull(),
   email: text("email").default("").notNull(),
   stripeAccountId: text("stripe_account_id"),
+  inviteToken: text("invite_token"),
+  inviteEmail: text("invite_email"),
   isActive: boolean("is_active").default(true).notNull(),
   createdAt: timestamp("created_at").defaultNow().notNull(),
 })

@@ -4,7 +4,7 @@ import { useEffect, useState } from 'react';
 import {
   getAllLaundromats, getAllOrders, getAllPayments, getAllServices,
   getAllPromoCodes, createLaundromat, updateLaundromat,
-  createPromoCode, updatePromoCode, getLaundromatById,
+  createPromoCode, updatePromoCode, getLaundromatById, sendLaundromatInvite,
 } from '@/lib/actions';
 import { PLATFORM_FEE_PERCENT } from '@/lib/types';
 import type { Laundromat, Order, Payment, Service, PromoCode } from '@/db/schema';
@@ -16,7 +16,7 @@ import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
 import { Badge } from '@/components/ui/badge';
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table';
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from '@/components/ui/dialog';
-import { Shield, Store, DollarSign, Package, TrendingUp, QrCode, Plus } from 'lucide-react';
+import { Shield, Store, DollarSign, Package, TrendingUp, QrCode, Plus, Mail } from 'lucide-react';
 
 export default function AdminDashboard() {
   const [isAuthenticated, setIsAuthenticated] = useState(false);
@@ -38,6 +38,12 @@ export default function AdminDashboard() {
   });
   const [laundromatIds, setLaundromatIds] = useState<Record<string, Laundromat | null>>({});
   const [isSubmitting, setIsSubmitting] = useState(false);
+
+  // Invite state
+  const [inviteLaundromat, setInviteLaundromat] = useState<Laundromat | null>(null);
+  const [inviteEmail, setInviteEmail] = useState('');
+  const [inviteLoading, setInviteLoading] = useState(false);
+  const [inviteResult, setInviteResult] = useState<{ success: boolean; message: string } | null>(null);
 
   useEffect(() => {
     if (isAuthenticated) {
@@ -126,6 +132,20 @@ export default function AdminDashboard() {
       await updatePromoCode(id, { isActive: !promo.isActive });
       await loadData();
     }
+  };
+
+  const handleSendInvite = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!inviteLaundromat) return;
+    setInviteLoading(true);
+    setInviteResult(null);
+    const result = await sendLaundromatInvite(
+      inviteLaundromat.id,
+      inviteEmail,
+      window.location.origin
+    );
+    setInviteResult(result);
+    setInviteLoading(false);
   };
 
   const totalRevenue = payments.filter(p => p.status === 'completed').reduce((sum, p) => sum + p.amount, 0);
@@ -322,7 +342,9 @@ export default function AdminDashboard() {
                       <TableHead>ID</TableHead>
                       <TableHead>Radius (mi)</TableHead>
                       <TableHead>Status</TableHead>
+                      <TableHead>Stripe</TableHead>
                       <TableHead>QR</TableHead>
+                      <TableHead>Invite</TableHead>
                       <TableHead>Actions</TableHead>
                     </TableRow>
                   </TableHeader>
@@ -336,8 +358,23 @@ export default function AdminDashboard() {
                           <Badge variant={l.isActive ? 'default' : 'secondary'}>{l.isActive ? 'Active' : 'Inactive'}</Badge>
                         </TableCell>
                         <TableCell>
+                          {l.stripeAccountId
+                            ? <Badge variant="default" className="bg-green-600">Connected</Badge>
+                            : <Badge variant="secondary">Not connected</Badge>}
+                        </TableCell>
+                        <TableCell>
                           <Button variant="ghost" size="sm" onClick={() => setSelectedQR(l)}>
                             <QrCode className="h-4 w-4" />
+                          </Button>
+                        </TableCell>
+                        <TableCell>
+                          <Button
+                            variant="outline"
+                            size="sm"
+                            onClick={() => { setInviteLaundromat(l); setInviteEmail(l.inviteEmail ?? ''); setInviteResult(null); }}
+                          >
+                            <Mail className="h-4 w-4 mr-1" />
+                            {l.inviteEmail ? 'Re-invite' : 'Invite'}
                           </Button>
                         </TableCell>
                         <TableCell>
@@ -598,6 +635,54 @@ export default function AdminDashboard() {
                 <Button type="submit" className="flex-1" disabled={isSubmitting}>{isSubmitting ? 'Creating…' : 'Create Promo'}</Button>
               </div>
             </form>
+          </DialogContent>
+        </Dialog>
+
+        {/* INVITE DIALOG */}
+        <Dialog open={!!inviteLaundromat} onOpenChange={(open) => { if (!open) { setInviteLaundromat(null); setInviteEmail(''); setInviteResult(null); } }}>
+          <DialogContent>
+            <DialogHeader>
+              <DialogTitle>Invite Owner — {inviteLaundromat?.name}</DialogTitle>
+            </DialogHeader>
+            {inviteResult?.success ? (
+              <div className="space-y-4 py-2">
+                <div className="p-4 bg-green-50 border border-green-200 rounded-lg text-green-800 text-sm">
+                  <p className="font-medium">Invite sent!</p>
+                  <p className="mt-1">{inviteResult.message}</p>
+                  <p className="mt-2 text-xs text-green-600">They will receive an email with a link to set up their portal account. The link auto-connects them to {inviteLaundromat?.name}.</p>
+                </div>
+                <Button className="w-full" variant="outline" onClick={() => { setInviteLaundromat(null); setInviteEmail(''); setInviteResult(null); }}>
+                  Done
+                </Button>
+              </div>
+            ) : (
+              <form onSubmit={handleSendInvite} className="space-y-4">
+                <div>
+                  <Label htmlFor="invite-email">Owner's Email Address</Label>
+                  <Input
+                    id="invite-email"
+                    type="email"
+                    value={inviteEmail}
+                    onChange={(e) => setInviteEmail(e.target.value)}
+                    placeholder="owner@laundromat.com"
+                    required
+                  />
+                  <p className="text-xs text-gray-500 mt-1">
+                    They'll receive an email with a link that automatically connects their account to <strong>{inviteLaundromat?.name}</strong>.
+                  </p>
+                </div>
+                {inviteResult && !inviteResult.success && (
+                  <p className="text-sm text-red-500">{inviteResult.message}</p>
+                )}
+                <div className="flex gap-2">
+                  <Button type="button" variant="outline" onClick={() => { setInviteLaundromat(null); setInviteEmail(''); setInviteResult(null); }} className="flex-1">Cancel</Button>
+                  <Button type="submit" className="flex-1" disabled={inviteLoading}>
+                    <Mail className="h-4 w-4 mr-1" />
+                    {inviteLoading ? 'Sending…' : 'Send Invite'}
+                  </Button>
+                </div>
+              </form>
+            )}
           </DialogContent>
         </Dialog>
       </main>

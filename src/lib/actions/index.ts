@@ -331,3 +331,69 @@ export async function createOrderStatusNotification(userId: string, orderId: str
     isRead: false,
   })
 }
+
+// ─── Laundromat Invites ───────────────────────────────────────────────────────
+
+export async function getLaundromatByInviteToken(token: string): Promise<Laundromat | null> {
+  const [l] = await db.select().from(laundromats).where(eq(laundromats.inviteToken, token)).limit(1)
+  return l ?? null
+}
+
+export async function sendLaundromatInvite(
+  laundromatId: string,
+  ownerEmail: string,
+  siteUrl: string
+): Promise<{ success: boolean; message: string }> {
+  // Generate a secure random token
+  const token = nanoid() + nanoid()
+
+  // Save token + email to laundromat
+  const [l] = await db
+    .update(laundromats)
+    .set({ inviteToken: token, inviteEmail: ownerEmail })
+    .where(eq(laundromats.id, laundromatId))
+    .returning()
+
+  if (!l) return { success: false, message: "Laundromat not found" }
+
+  const inviteUrl = `${siteUrl}/laundromat/invite?token=${token}`
+
+  // Send email via Resend if API key present, otherwise log to console
+  const apiKey = process.env.RESEND_API_KEY
+  if (apiKey) {
+    try {
+      await fetch("https://api.resend.com/emails", {
+        method: "POST",
+        headers: {
+          Authorization: `Bearer ${apiKey}`,
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({
+          from: "FreshFold <noreply@freshfold-blue.vercel.app>",
+          to: ownerEmail,
+          subject: `You've been invited to manage ${l.name} on FreshFold`,
+          html: `
+            <div style="font-family:sans-serif;max-width:480px;margin:0 auto">
+              <h2 style="color:#4f46e5">FreshFold Staff Invitation</h2>
+              <p>You've been invited to manage <strong>${l.name}</strong> on FreshFold.</p>
+              <p>Click the button below to set up your account and access the laundromat portal.</p>
+              <a href="${inviteUrl}" style="display:inline-block;margin:16px 0;padding:12px 24px;background:#4f46e5;color:#fff;text-decoration:none;border-radius:6px;font-weight:bold">
+                Accept Invitation
+              </a>
+              <p style="color:#666;font-size:13px">This link is unique to you. If you did not expect this email, you can ignore it.</p>
+              <p style="color:#999;font-size:12px">FreshFold · Laundry pickup &amp; delivery</p>
+            </div>
+          `,
+        }),
+      })
+    } catch (err) {
+      console.error("Resend email failed:", err)
+      return { success: false, message: "Failed to send invite email" }
+    }
+  } else {
+    // Dev mode — log the URL
+    console.log(`[DEV] Invite URL for ${ownerEmail}: ${inviteUrl}`)
+  }
+
+  return { success: true, message: `Invite sent to ${ownerEmail}` }
+}
