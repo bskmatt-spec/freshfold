@@ -24,7 +24,7 @@ import { Badge } from '@/components/ui/badge';
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from '@/components/ui/dialog';
 import {
   MapPin, Shirt, Clock, CreditCard, Package, CheckCircle, Truck,
-  Bell, Tag, Calendar, X, ChevronRight, Home, ClipboardList, LogOut, Eye, EyeOff,
+  Bell, Tag, Calendar, X, ChevronRight, Home, ClipboardList, LogOut, Eye, EyeOff, Navigation,
 } from 'lucide-react';
 import { loadStripe } from '@stripe/stripe-js';
 import { Elements, PaymentElement, useStripe, useElements } from '@stripe/react-stripe-js';
@@ -91,6 +91,12 @@ export default function CustomerApp() {
   const [authError, setAuthError] = useState('');
   const [authLoading, setAuthLoading] = useState(false);
   const [showPassword, setShowPassword] = useState(false);
+  // Forgot password
+  const [showForgot, setShowForgot] = useState(false);
+  const [forgotEmail, setForgotEmail] = useState('');
+  const [forgotLoading, setForgotLoading] = useState(false);
+  const [forgotSent, setForgotSent] = useState(false);
+  const [forgotError, setForgotError] = useState('');
   // Phone verification
   const [verifyStep, setVerifyStep] = useState<{ userId: string; phone: string; devCode?: string } | null>(null);
   const [verifyCode, setVerifyCode] = useState('');
@@ -173,16 +179,26 @@ export default function CustomerApp() {
     }
   };
 
+  const handleForgotPassword = async (e: React.FormEvent) => {
+    e.preventDefault();
+    setForgotLoading(true);
+    setForgotError('');
+    const { error } = await authClient.requestPasswordReset({
+      email: forgotEmail,
+      redirectTo: `${window.location.origin}/reset-password`,
+    });
+    if (error) {
+      setForgotError(error.message ?? 'Failed to send reset email.');
+    } else {
+      setForgotSent(true);
+    }
+    setForgotLoading(false);
+  };
+
   const handleSignUp = async (e: React.FormEvent) => {
     e.preventDefault();
     setAuthLoading(true);
     setAuthError('');
-
-    if (!authForm.phone.trim()) {
-      setAuthError('Phone number is required for verification.');
-      setAuthLoading(false);
-      return;
-    }
 
     const { data, error } = await authClient.signUp.email({
       name: authForm.name,
@@ -202,21 +218,23 @@ export default function CustomerApp() {
       return;
     }
 
-    // Send phone verification code
-    const res = await fetch('/api/verify/send', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ userId, phone: authForm.phone }),
-    });
-    const result = await res.json();
-
-    if (!res.ok) {
-      setAuthError(result.error ?? 'Failed to send verification code.');
-      setAuthLoading(false);
-      return;
+    // If phone provided, send verification code — otherwise go straight in
+    if (authForm.phone.trim()) {
+      const res = await fetch('/api/verify/send', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ userId, phone: authForm.phone }),
+      });
+      const result = await res.json();
+      if (!res.ok) {
+        setAuthError(result.error ?? 'Failed to send verification code.');
+        setAuthLoading(false);
+        return;
+      }
+      setVerifyStep({ userId, phone: authForm.phone, devCode: result.devCode });
+    } else {
+      await refetchSession();
     }
-
-    setVerifyStep({ userId, phone: authForm.phone, devCode: result.devCode });
     setAuthLoading(false);
   };
 
@@ -269,29 +287,86 @@ export default function CustomerApp() {
 
   // ── LAUNDROMAT SEARCH ─────────────────────────────────────────────────────
 
+  const [locationError, setLocationError] = useState('');
+  const [locating, setLocating] = useState(false);
+
   const findLaundromat = async () => {
     setNearestLaundromat(undefined);
-    const mockLat = 40.7128 + (Math.random() - 0.5) * 0.1;
-    const mockLon = -74.006 + (Math.random() - 0.5) * 0.1;
-    setLat(mockLat);
-    setLon(mockLon);
+    setLocationError('');
+    setLocating(true);
 
-    const nearest = await findNearestLaundromat(mockLat, mockLon);
-    if (nearest) {
-      setNearestLaundromat(nearest);
-      let svcList = await getActiveServicesByLaundromat(nearest.id);
-      if (svcList.length === 0) svcList = await createDefaultServices(nearest.id);
-      setServices(svcList);
-      setSelectedService(svcList[0]);
-      setScheduledPickup('');
-      setOrderNotes('');
-      setPromoCode('');
-      setPromoDiscount(0);
-      setPromoApplied(false);
-      setPromoError('');
-      setStep('schedule');
-    } else {
-      setNearestLaundromat(null);
+    let userLat: number;
+    let userLon: number;
+
+    // Try browser geolocation first
+    try {
+      const position = await new Promise<GeolocationPosition>((resolve, reject) => {
+        if (!navigator.geolocation) {
+          reject(new Error('Geolocation not supported by your browser'));
+          return;
+        }
+        navigator.geolocation.getCurrentPosition(resolve, reject, {
+          enableHighAccuracy: true,
+          timeout: 10000,
+          maximumAge: 60000,
+        });
+      });
+      userLat = position.coords.latitude;
+      userLon = position.coords.longitude;
+      setLat(userLat);
+      setLon(userLon);
+    } catch (geoErr: unknown) {
+      // Geolocation failed — fall back to geocoding the typed address
+      if (!address.trim()) {
+        setLocationError('Please enter your address or allow location access.');
+        setLocating(false);
+        return;
+      }
+      try {
+        const encoded = encodeURIComponent(address);
+        const res = await fetch(
+          `https://nominatim.openstreetmap.org/search?q=${encoded}&format=json&limit=1`,
+          { headers: { 'User-Agent': 'FreshFold/1.0' } }
+        );
+        const results = await res.json();
+        if (!results.length) {
+          setLocationError('Could not find that address. Please try a more specific address.');
+          setLocating(false);
+          return;
+        }
+        userLat = parseFloat(results[0].lat);
+        userLon = parseFloat(results[0].lon);
+        setLat(userLat);
+        setLon(userLon);
+      } catch {
+        setLocationError('Could not determine your location. Please try again.');
+        setLocating(false);
+        return;
+      }
+    }
+
+    try {
+      const nearest = await findNearestLaundromat(userLat, userLon);
+      if (nearest) {
+        setNearestLaundromat(nearest);
+        let svcList = await getActiveServicesByLaundromat(nearest.id);
+        if (svcList.length === 0) svcList = await createDefaultServices(nearest.id);
+        setServices(svcList);
+        setSelectedService(svcList[0]);
+        setScheduledPickup('');
+        setOrderNotes('');
+        setPromoCode('');
+        setPromoDiscount(0);
+        setPromoApplied(false);
+        setPromoError('');
+        setStep('schedule');
+      } else {
+        setNearestLaundromat(null);
+      }
+    } catch {
+      setLocationError('Something went wrong. Please try again.');
+    } finally {
+      setLocating(false);
     }
   };
 
@@ -509,6 +584,51 @@ export default function CustomerApp() {
   }
 
   if (!session?.user) {
+    // ── FORGOT PASSWORD SCREEN ──
+    if (showForgot) {
+      return (
+        <div className="min-h-screen bg-gradient-to-br from-blue-50 to-indigo-100 flex items-center justify-center p-4">
+          <div className="w-full max-w-md">
+            <div className="text-center mb-8">
+              <div className="mx-auto mb-4 flex h-16 w-16 items-center justify-center rounded-full bg-blue-500">
+                <Shirt className="h-8 w-8 text-white" />
+              </div>
+              <h1 className="text-2xl font-bold">Reset password</h1>
+              <p className="text-gray-600 mt-1">We'll send a reset link to your email</p>
+            </div>
+            <Card>
+              <CardContent className="pt-6">
+                {forgotSent ? (
+                  <div className="text-center space-y-3 py-2">
+                    <CheckCircle className="h-10 w-10 text-green-500 mx-auto" />
+                    <p className="font-medium">Check your email</p>
+                    <p className="text-sm text-gray-500">A password reset link has been sent to <strong>{forgotEmail}</strong>. Check your spam folder if you don't see it.</p>
+                    <Button variant="outline" className="w-full mt-2" onClick={() => { setShowForgot(false); setForgotSent(false); setForgotEmail(''); }}>
+                      Back to Sign In
+                    </Button>
+                  </div>
+                ) : (
+                  <form onSubmit={handleForgotPassword} className="space-y-4">
+                    <div>
+                      <Label htmlFor="forgot-email">Email Address</Label>
+                      <Input id="forgot-email" type="email" value={forgotEmail} onChange={e => setForgotEmail(e.target.value)} placeholder="jane@email.com" required />
+                    </div>
+                    {forgotError && <p className="text-sm text-red-500">{forgotError}</p>}
+                    <Button type="submit" className="w-full" disabled={forgotLoading}>
+                      {forgotLoading ? 'Sending…' : 'Send Reset Link'}
+                    </Button>
+                    <button type="button" onClick={() => setShowForgot(false)} className="w-full text-sm text-gray-500 hover:text-gray-700">
+                      ← Back to Sign In
+                    </button>
+                  </form>
+                )}
+              </CardContent>
+            </Card>
+          </div>
+        </div>
+      );
+    }
+
     return (
       <div className="min-h-screen bg-gradient-to-br from-blue-50 to-indigo-100 flex items-center justify-center p-4">
         <div className="w-full max-w-md">
@@ -556,6 +676,9 @@ export default function CustomerApp() {
                   <Button type="submit" className="w-full" disabled={authLoading}>
                     {authLoading ? 'Signing in…' : 'Sign In'}
                   </Button>
+                  <button type="button" onClick={() => { setShowForgot(true); setForgotEmail(authForm.email); }} className="w-full text-sm text-blue-600 hover:underline text-center">
+                    Forgot password?
+                  </button>
                 </form>
               ) : (
                 <form onSubmit={handleSignUp} className="space-y-4">
@@ -568,8 +691,8 @@ export default function CustomerApp() {
                     <Input id="su-email" type="email" value={authForm.email} onChange={(e) => setAuthForm({ ...authForm, email: e.target.value })} placeholder="jane@email.com" required />
                   </div>
                   <div>
-                    <Label htmlFor="su-phone">Phone Number</Label>
-                    <Input id="su-phone" type="tel" value={authForm.phone} onChange={(e) => setAuthForm({ ...authForm, phone: e.target.value })} placeholder="(555) 123-4567" required />
+                    <Label htmlFor="su-phone">Phone Number <span className="text-gray-400 font-normal text-xs">(optional — for pickup reminders)</span></Label>
+                    <Input id="su-phone" type="tel" value={authForm.phone} onChange={(e) => setAuthForm({ ...authForm, phone: e.target.value })} placeholder="(555) 123-4567" />
                   </div>
                   <div>
                     <Label htmlFor="su-password">Password</Label>
@@ -846,15 +969,24 @@ export default function CustomerApp() {
                     </div>
                   )}
                   <Input
-                    placeholder="Enter your full address"
+                    placeholder="Enter your address"
                     value={address}
                     onChange={(e) => setAddress(e.target.value)}
                   />
-                  <Button onClick={findLaundromat} disabled={!address} className="w-full">
-                    Find Nearest Laundromat
+                  <Button onClick={findLaundromat} disabled={locating} className="w-full">
+                    {locating ? 'Finding nearest laundromat…' : 'Find Nearest Laundromat'}
                   </Button>
-                  {nearestLaundromat === null && (
-                    <p className="text-sm text-red-500 text-center">No laundromat services your area yet. Try a different address.</p>
+                  <button
+                    type="button"
+                    onClick={() => { setAddress(''); findLaundromat(); }}
+                    disabled={locating}
+                    className="w-full flex items-center justify-center gap-1.5 text-sm text-blue-600 hover:underline disabled:opacity-40"
+                  >
+                    <Navigation className="h-3.5 w-3.5" /> Use my current location
+                  </button>
+                  {locationError && <p className="text-sm text-red-500 text-center">{locationError}</p>}
+                  {nearestLaundromat === null && !locationError && (
+                    <p className="text-sm text-red-500 text-center">No laundromat services your area yet.</p>
                   )}
                 </CardContent>
               </Card>
