@@ -21,6 +21,7 @@ export default function EditLaundromatPage() {
   const [form, setForm] = useState({ name: "", address: "", latitude: "", longitude: "", deliveryRadius: "5", phone: "", email: "" });
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
+  const [error, setError] = useState<string | null>(null);
 
   useEffect(() => {
     (async () => {
@@ -30,14 +31,21 @@ export default function EditLaundromatPage() {
         return;
       }
       try {
+        setError(null);
         const res = await fetch('/api/admin/data');
+        if (!res.ok) {
+          const text = await res.text().catch(() => '');
+          console.error('/api/admin/data returned non-OK', res.status, text);
+          setError(`Server returned ${res.status} when loading laundromat data`);
+          return;
+        }
         const text = await res.text();
         let parsed: any;
         try {
           parsed = JSON.parse(text);
         } catch (e) {
           console.error('Failed to parse /api/admin/data response', e);
-          setLoading(false);
+          setError('Invalid server response while loading laundromat data');
           return;
         }
         const laundromats: Laundromat[] = parsed.laundromats ?? [];
@@ -53,9 +61,12 @@ export default function EditLaundromatPage() {
             phone: l.phone ?? "",
             email: l.email ?? "",
           });
+        } else {
+          setError('Laundromat not found');
         }
       } catch (err) {
         console.error('Failed to load laundromat data', err);
+        setError(String(err instanceof Error ? err.message : err));
       } finally {
         setLoading(false);
       }
@@ -80,6 +91,18 @@ export default function EditLaundromatPage() {
   };
 
   if (loading) return <div className="min-h-screen flex items-center justify-center">Loading…</div>;
+  if (error) return (
+    <div className="min-h-screen flex items-center justify-center p-4">
+      <div className="max-w-lg w-full bg-white p-6 rounded shadow">
+        <h2 className="text-lg font-semibold mb-2">Error loading laundromat</h2>
+        <p className="text-sm text-red-600 mb-4">{error}</p>
+        <div className="flex gap-2">
+          <Button onClick={() => { setLoading(true); setError(null); /* re-run effect */ setTimeout(() => { /* noop to trigger */ }, 0); }}>Retry</Button>
+          <Button variant="outline" onClick={() => router.push('/admin')}>Back to Admin</Button>
+        </div>
+      </div>
+    </div>
+  );
   if (!laundromat) return <div className="min-h-screen flex items-center justify-center">Laundromat not found</div>;
 
   return (
