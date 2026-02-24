@@ -120,27 +120,32 @@ export const RECOMMENDED_SERVICES = [
   {
     name: 'Wash & Fold',
     description: 'Standard wash and fold service per bag',
+    // Typical bag runs $20–$35 (representative price)
     recommendedPrice: 25
   },
   {
     name: 'Dry Cleaning',
     description: 'Professional dry cleaning service',
-    recommendedPrice: 45
+    // Representative per-item average (covers shirts/pants/dresses mix)
+    recommendedPrice: 12
   },
   {
     name: 'Wash & Press',
     description: 'Wash and press shirts',
-    recommendedPrice: 35
+    // Representative per-item price for wash & press (shirts/etc.)
+    recommendedPrice: 6
   },
   {
     name: 'Bedding & Linens',
     description: 'Wash and dry bedding, sheets, and linens',
-    recommendedPrice: 55
+    // Typical bedding/linens pricing: sheets $15–$25, duvets $25–$45 — use a middle value
+    recommendedPrice: 35
   },
   {
     name: 'Express Service',
     description: 'Same day delivery service',
-    recommendedPrice: 65
+    // Express is usually an upcharge (e.g. +$10–$15 / 20%) — representative surcharge value
+    recommendedPrice: 15
   }
 ];
 
