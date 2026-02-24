@@ -1,8 +1,8 @@
 "use client";
 
 import { useEffect, useState } from "react";
-import { useRouter, useSearchParams } from "next/navigation";
-import { getLaundromatById, updateLaundromat } from "@/lib/actions";
+import { useRouter, useParams, useSearchParams } from "next/navigation";
+import { updateLaundromat } from "@/lib/actions";
 import type { Laundromat } from "@/db/schema";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -11,8 +11,11 @@ import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 
 export default function EditLaundromatPage() {
   const router = useRouter();
-  const params = useSearchParams();
-  const id = params.get("id") ?? "";
+  const params = useParams();
+  const search = useSearchParams();
+  const idFromParams = (params as any)?.id ?? "";
+  const idFromQuery = search?.get ? search.get('id') ?? "" : "";
+  const id = idFromParams || idFromQuery;
 
   const [laundromat, setLaundromat] = useState<Laundromat | null>(null);
   const [form, setForm] = useState({ name: "", address: "", latitude: "", longitude: "", deliveryRadius: "5", phone: "", email: "" });
@@ -21,21 +24,41 @@ export default function EditLaundromatPage() {
 
   useEffect(() => {
     (async () => {
-      if (!id) return;
-      const l = await getLaundromatById(id);
-      if (l) {
-        setLaundromat(l);
-        setForm({
-          name: l.name,
-          address: l.address,
-          latitude: l.latitude?.toString() ?? "",
-          longitude: l.longitude?.toString() ?? "",
-          deliveryRadius: l.deliveryRadius?.toString() ?? "5",
-          phone: l.phone ?? "",
-          email: l.email ?? "",
-        });
+      if (!id) {
+        // no id available — bail out and show "not found" instead of leaving loading state
+        setLoading(false);
+        return;
       }
-      setLoading(false);
+      try {
+        const res = await fetch('/api/admin/data');
+        const text = await res.text();
+        let parsed: any;
+        try {
+          parsed = JSON.parse(text);
+        } catch (e) {
+          console.error('Failed to parse /api/admin/data response', e);
+          setLoading(false);
+          return;
+        }
+        const laundromats: Laundromat[] = parsed.laundromats ?? [];
+        const l = laundromats.find((x: Laundromat) => x.id === id) ?? null;
+        if (l) {
+          setLaundromat(l);
+          setForm({
+            name: l.name,
+            address: l.address,
+            latitude: l.latitude?.toString() ?? "",
+            longitude: l.longitude?.toString() ?? "",
+            deliveryRadius: l.deliveryRadius?.toString() ?? "5",
+            phone: l.phone ?? "",
+            email: l.email ?? "",
+          });
+        }
+      } catch (err) {
+        console.error('Failed to load laundromat data', err);
+      } finally {
+        setLoading(false);
+      }
     })();
   }, [id]);
 
